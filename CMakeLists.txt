@@ -1,13 +1,12 @@
+cmake_minimum_required(VERSION 3.6)
 
-cmake_minimum_required (VERSION 3.6)
+project(lz
+        VERSION 1.0.0
+        LANGUAGES CXX)
 
-project (LazyCode
-         VERSION 1.0.0
-         LANGUAGES CXX)
-
-add_subdirectory (vendor)
-add_subdirectory (src)
+add_subdirectory(vendor)
+add_subdirectory(src)
 
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
-    add_subdirectory (example)
+    add_subdirectory(test)
 endif()

@@ -1,3 +1,6 @@
 [submodule "vendor/optional-lite"]
 	path = vendor/optional-lite
 	url = https://github.com/martinmoene/optional-lite
+[submodule "vendor/Catch2"]
+	path = vendor/Catch2
+	url = https://github.com/catchorg/Catch2

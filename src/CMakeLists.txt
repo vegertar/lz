@@ -1,12 +1,12 @@
+cmake_minimum_required(VERSION 3.6)
 
-cmake_minimum_required (VERSION 3.6)
+add_library(lz INTERFACE)
 
+target_include_directories(lz INTERFACE
+                           $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+                           $<INSTALL_INTERFACE:include>)
 
+target_link_libraries(lz INTERFACE optional-lite)
 
-add_library (lazyCode INTERFACE)
-target_include_directories (lazyCode INTERFACE
-                            $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
-                            $<INSTALL_INTERFACE:include>)
-target_link_libraries (lazyCode INTERFACE optional-lite)
-target_compile_features (lazyCode INTERFACE ${CXX_FEATURES_USED})
-target_compile_definitions (lazyCode INTERFACE)
+target_compile_features(lz INTERFACE ${CXX_FEATURES_USED})
+target_compile_definitions(lz INTERFACE)
