@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <functional>
 #include <tuple>
 #include <type_traits>
@@ -9,97 +10,11 @@
 
 namespace lz {
 
-using nonstd::make_optional;
-using nonstd::nullopt;
-using nonstd::optional;
-
-template <typename T>
-using optionalref = optional<std::reference_wrapper<T>>;
-
-template <typename T>
-struct OptionOrRef : public optional<T> {
-  OptionOrRef() = default;
-
-  template <typename V>
-  OptionOrRef(V &&v) : optional<T>::optional(std::forward<V>(v)) {}
-};
-
-template <typename T>
-struct OptionOrRef<T &> : public optionalref<T> {
-  OptionOrRef() = default;
-
-  template <typename V>
-  OptionOrRef(V &&v) : optionalref<T>::optional(std::forward<V>(v)) {}
-
-  decltype(auto) operator*() { return optionalref<T>::operator*().get(); }
-};
-
-template <typename T>
-struct OptionOrRef<T &&> : public optional<T> {
-  OptionOrRef() = default;
-
-  template <typename V>
-  OptionOrRef(V &&v) : optional<T>::optional(std::forward<V>(v)) {}
-};
-
-template <typename T>
-struct OptionOrRef<OptionOrRef<T>> : public optional<T> {
-  OptionOrRef() = default;
-
-  template <typename V>
-  OptionOrRef(V &&v) : optional<T>::optional(std::forward<V>(v)) {}
-};
-
-template <typename T>
-struct OptionOrRef<OptionOrRef<T &>> : public optionalref<T> {
-  OptionOrRef() = default;
-
-  template <typename V>
-  OptionOrRef(V &&v) : optionalref<T>::optional(std::forward<V>(v)) {}
-
-  decltype(auto) operator*() { return optionalref<T>::operator*().get(); }
-};
-
-template <typename T>
-struct OptionOrRef<OptionOrRef<T &&>> : public optional<T> {
-  OptionOrRef() = default;
-
-  template <typename V>
-  OptionOrRef(V &&v) : optional<T>::optional(std::forward<V>(v)) {}
-};
-
 namespace detail {
 
-//
-// lambda trains, See also: https://stackoverflow.com/a/7943765
-//
-// For generic types, directly use the result of the signature of its
-// 'operator()' template <typename T> struct FunctionTraits
-//     : public FunctionTraits<decltype(&T::operator())> {};
+struct GeneratorBase {};
 
-// // We specialize for pointers to member function
-// template <typename ClassType, typename ReturnType, typename... Args>
-// struct FunctionTraits<ReturnType(ClassType::*)(Args...) const> {
-//     // Arity is the number of arguments.
-//     enum { Arity = sizeof...(Args) };
-
-//     typedef ReturnType ResultType;
-
-//     template <std::size_t i>
-//     struct Arg {
-//         typedef typename std::tuple_element<i, std::tuple<Args...>>::type
-//         Type;
-//         // the i-th argument is equivalent to the i-th tuple element of a
-//         tuple
-//         // composed of those arguments.
-//     };
-// };
-
-// template <typename T, std::size_t i>
-// using ArgType = typename FunctionTraits<T>::Arg<i>::Type;
-
-// template <typename T>
-// using ResultType = typename FunctionTraits<T>::ResultType;
+struct OptionOrRefBase {};
 
 template <typename T>
 using RmRef = typename std::remove_reference<T>::type;
@@ -171,6 +86,103 @@ using EnableIfYieldVal =
 //       [&](auto... Is) { return f(std::get<Is>(t)...); });
 // }
 
+}  // namespace detail
+
+using nonstd::make_optional;
+using nonstd::nullopt;
+using nonstd::optional;
+
+template <typename T>
+using optionalref = optional<std::reference_wrapper<T>>;
+
+template <typename T>
+struct OptionOrRef : public optional<T>, detail::OptionOrRefBase {
+  OptionOrRef() = default;
+
+  template <typename V>
+  OptionOrRef(V &&v) : optional<T>::optional(std::forward<V>(v)) {}
+};
+
+template <typename T>
+struct OptionOrRef<T &> : public optionalref<T>, detail::OptionOrRefBase {
+  OptionOrRef() = default;
+
+  template <typename V>
+  OptionOrRef(V &&v) : optionalref<T>::optional(std::forward<V>(v)) {}
+
+  decltype(auto) operator*() { return optionalref<T>::operator*().get(); }
+};
+
+template <typename T>
+struct OptionOrRef<T &&> : public optional<T>, detail::OptionOrRefBase {
+  OptionOrRef() = default;
+
+  template <typename V>
+  OptionOrRef(V &&v) : optional<T>::optional(std::forward<V>(v)) {}
+};
+
+template <typename T>
+struct OptionOrRef<OptionOrRef<T>> : public optional<T>,
+                                     detail::OptionOrRefBase {
+  OptionOrRef() = default;
+
+  template <typename V>
+  OptionOrRef(V &&v) : optional<T>::optional(std::forward<V>(v)) {}
+};
+
+template <typename T>
+struct OptionOrRef<OptionOrRef<T &>> : public optionalref<T>,
+                                       detail::OptionOrRefBase {
+  OptionOrRef() = default;
+
+  template <typename V>
+  OptionOrRef(V &&v) : optionalref<T>::optional(std::forward<V>(v)) {}
+
+  decltype(auto) operator*() { return optionalref<T>::operator*().get(); }
+};
+
+template <typename T>
+struct OptionOrRef<OptionOrRef<T &&>> : public optional<T>,
+                                        detail::OptionOrRefBase {
+  OptionOrRef() = default;
+
+  template <typename V>
+  OptionOrRef(V &&v) : optional<T>::optional(std::forward<V>(v)) {}
+};
+
+namespace detail {
+
+//
+// lambda trains, See also: https://stackoverflow.com/a/7943765
+//
+// For generic types, directly use the result of the signature of its
+// 'operator()' template <typename T> struct FunctionTraits
+//     : public FunctionTraits<decltype(&T::operator())> {};
+
+// // We specialize for pointers to member function
+// template <typename ClassType, typename ReturnType, typename... Args>
+// struct FunctionTraits<ReturnType(ClassType::*)(Args...) const> {
+//     // Arity is the number of arguments.
+//     enum { Arity = sizeof...(Args) };
+
+//     typedef ReturnType ResultType;
+
+//     template <std::size_t i>
+//     struct Arg {
+//         typedef typename std::tuple_element<i, std::tuple<Args...>>::type
+//         Type;
+//         // the i-th argument is equivalent to the i-th tuple element of a
+//         tuple
+//         // composed of those arguments.
+//     };
+// };
+
+// template <typename T, std::size_t i>
+// using ArgType = typename FunctionTraits<T>::Arg<i>::Type;
+
+// template <typename T>
+// using ResultType = typename FunctionTraits<T>::ResultType;
+
 template <typename T>
 struct YieldTypeImpl {
   typedef T type;
@@ -201,10 +213,13 @@ struct YieldTypeImpl<OptionOrRef<T &&>> {
   typedef T type;
 };
 
+// template <typename T>
+// struct YieldTypeImpl<OptionOrRef<T> &&> {
+//   typedef T type;
+// };
+
 template <typename T>
 using YieldType = typename YieldTypeImpl<T>::type;
-
-struct GeneratorBase {};
 
 }  // namespace detail
 
@@ -213,12 +228,15 @@ decltype(auto) apply(Gen &&gen) {
   typedef typename detail::RmRef<Gen>::YieldType YieldType;
   OptionOrRef<YieldType> res;
   while (true) {
+    // N movements
     decltype(auto) val = gen();
     if (!val) {
       break;
     }
+    // 1 movement + (N - 1) move-assignments
     res = std::forward<decltype(val)>(val);
   }
+  // 1 movement
   return res;
 }
 
@@ -247,7 +265,12 @@ class Generator : public detail::GeneratorBase {
     return value.has_value();
   }
 
-  decltype(auto) operator*() { return *value; }
+  decltype(auto) operator*() {
+    // YieldType &operator*() {
+    this->operator bool();
+    return std::forward<YieldType>(*value);
+    // return *value;
+  }
 
  private:
   Member member;
@@ -276,7 +299,12 @@ class Generator<void, ProducerFunc> : public detail::GeneratorBase {
     return value.has_value();
   }
 
-  decltype(auto) operator*() { return *value; }
+  decltype(auto) operator*() {
+    // YieldType &operator*() {
+    this->operator bool();
+    return std::forward<YieldType>(*value);
+    // return *value;
+  }
 
  private:
   ProducerFunc producer;
@@ -378,12 +406,33 @@ template <typename Func, typename Gen>
 using Gen1YieldType = decltype(std::declval<Func &>()(
     std::declval<typename detail::RmRef<Gen>::YieldType &>()));
 
-template <typename Func>
+template <typename Func, detail::EnableIfType<detail::OptionOrRefBase,
+                                              Gen0YieldType<Func>> = 0>
+inline decltype(auto) genApply(Func &&f) {
+  return f();
+}
+
+template <typename Func, detail::EnableIfNotType<detail::OptionOrRefBase,
+                                                 Gen0YieldType<Func>> = 0>
 inline OptionOrRef<Gen0YieldType<Func>> genApply(Func &&f) {
   return f();
 }
 
+template <
+    typename Func, typename Gen,
+    detail::EnableIfType<detail::OptionOrRefBase, Gen1YieldType<Func, Gen>> = 0,
+    detail::EnableIfType<detail::GeneratorBase, Gen> = 0>
+inline decltype(auto) genApply(Func &&f, Gen &&g) {
+  decltype(auto) val = g();
+  if (!val) {
+    return nullopt;
+  }
+  return f(std::forward<decltype(*val)>(*val));
+}
+
 template <typename Func, typename Gen,
+          detail::EnableIfNotType<detail::OptionOrRefBase,
+                                  Gen1YieldType<Func, Gen>> = 0,
           detail::EnableIfType<detail::GeneratorBase, Gen> = 0>
 inline OptionOrRef<Gen1YieldType<Func, Gen>> genApply(Func &&f, Gen &&g) {
   decltype(auto) val = g();

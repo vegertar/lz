@@ -4,336 +4,1131 @@
 
 #include <catch2/catch.hpp>
 #include <cstdlib>
-#include <fstream>
+#include <limits>
+#include <regex>
+#include <sstream>
 #include <string>
 
-static inline const char *hello() { return "hello"; }
-
-static inline decltype(auto) range(int start = 0) {
-  return [n = start]() mutable { return n++; };
-}
-
-static inline lz::OptionOrRef<std::ifstream> openNotExisted() {
-  std::ifstream file("not existed file");
-  if (file) {
-    return std::move(file);
-  }
-  return lz::nullopt;
-}
-
-static inline lz::OptionOrRef<std::ifstream> openAndSeek10() {
-  std::ifstream file(__FILE__);
-  if (file) {
-    file.seekg(10);
-    return std::move(file);
-  }
-  return lz::nullopt;
-}
-
 struct NoCopy {
-  std::string s;
+  static std::size_t moved;
+  static std::size_t moveAssigned;
+  static std::size_t destroyed;
+
+  ~NoCopy() { NoCopy::destroyed += 1; }
 
   NoCopy() = default;
-  NoCopy(NoCopy &&) = default;
-  NoCopy &operator=(NoCopy &&) = default;
+  NoCopy(NoCopy &&) { NoCopy::moved += 1; }
+  NoCopy &operator=(NoCopy &&) {
+    NoCopy::moveAssigned += 1;
+    return *this;
+  }
 
   NoCopy(const NoCopy &) = delete;
   NoCopy &operator=(const NoCopy &) = delete;
 };
 
-static inline lz::OptionOrRef<NoCopy> noCopy() {
-  NoCopy nc;
-  nc.s = "no copy";
+std::size_t NoCopy::moved = 0;
+std::size_t NoCopy::moveAssigned = 0;
+std::size_t NoCopy::destroyed = 0;
 
-  auto n = std::rand() % 100;
-  if (n < 50) {
-    return nc;
-  }
-  if (n < 80) {
-    return NoCopy{s : nc.s};
-  }
-  return lz::nullopt;
+static inline void cleanup() {
+  NoCopy::moved = 0;
+  NoCopy::moveAssigned = 0;
+  NoCopy::destroyed = 0;
 }
 
-static inline decltype(auto) noCopyByConstRef() {
-  return [nc = NoCopy{s : "no copy"}]() -> lz::OptionOrRef<const NoCopy &> {
-    auto n = std::rand() % 100;
-    if (n < 50) {
-      return std::cref(nc);
-    }
-    return lz::nullopt;
+static NoCopy nc;
+
+static NoCopy rvalue() { return NoCopy{}; }
+static NoCopy &lvalue() { return nc; }
+static const NoCopy &clvalue() { return nc; }
+
+static lz::OptionOrRef<NoCopy> roption() { return NoCopy{}; }
+static lz::OptionOrRef<NoCopy &> loption() { return std::ref(nc); }
+static lz::OptionOrRef<const NoCopy &> cloption() { return std::cref(nc); }
+
+static auto rvalueLambda() {
+  return [] { return NoCopy{}; };
+}
+
+static decltype(auto) lvalueLambda() {
+  return [nc = NoCopy{}]() mutable -> NoCopy & { return nc; };
+}
+
+static auto clvalueLambda() {
+  return [nc = NoCopy{}]() -> const NoCopy & { return nc; };
+}
+
+static auto roptionLambda() {
+  return []() -> lz::OptionOrRef<NoCopy> { return NoCopy{}; };
+}
+
+static auto loptionLambda() {
+  return [nc = NoCopy{}]() mutable -> lz::OptionOrRef<NoCopy &> {
+    return std::ref(nc);
   };
 }
 
-static inline decltype(auto) noCopyByRef() {
-  return [nc = NoCopy{s : "no copy"}]() mutable -> lz::OptionOrRef<NoCopy &> {
-    auto n = std::rand() % 100;
-    if (n < 50) {
-      return std::ref(nc);
-    }
-    return lz::nullopt;
+static auto cloptionLambda() {
+  return [nc = NoCopy{}]() -> lz::OptionOrRef<const NoCopy &> {
+    return std::cref(nc);
   };
 }
 
-static inline decltype(auto) getline(std::ifstream &file) {
-  std::string line;
-  while (file) {
-    char c;
-    if (file.get(c)) {
-      line += c;
-      if (c == '\n') {
-        break;
-      }
-    }
-  }
+template <typename T>
+using Before = typename T::YieldType;
 
-  return line;
+template <typename T>
+using After = typename lz::detail::YieldType<T>;
+
+template <typename T, typename V>
+static constexpr void TypeAssert() {
+  static_assert(std::is_same<T, V>::value, "err");
 }
 
-static inline decltype(auto) getOneLine(const char *filename) {
-  return [file = std::ifstream(filename),
-          lines = std::vector<std::string>{}]() mutable
-         -> lz::OptionOrRef<const std::vector<std::string> &> {
-    if (!file) {
-      return lz::nullopt;
-    }
-
-    lines.emplace_back(getline(file));
-    return std::cref(lines);
-  };
+template <typename T1, typename T2 = T1, typename Gen,
+          lz::detail::EnableIfType<lz::detail::GeneratorBase, Gen> = 0>
+static constexpr void TypeAssert(Gen &gen) {
+  TypeAssert<T1, Before<Gen>>();
+  TypeAssert<T2, After<decltype(*gen)>>();
 }
 
-static inline decltype(auto) getAllLines(const char *filename) {
-  return [filename]() -> lz::OptionOrRef<std::vector<std::string>> {
-    auto file = std::ifstream(filename);
-    if (!file) {
-      return lz::nullopt;
-    }
+#define VARGS_(_10, _9, _8, _7, _6, _5, _4, _3, _2, _1, N, ...) N
+#define VARGS(...) VARGS_(__VA_ARGS__, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
 
-    std::vector<std::string> lines;
-    while (file) {
-      lines.emplace_back(getline(file));
-    }
-    return std::move(lines);
-  };
+#define CONCAT_(a, b) a##b
+#define CONCAT(a, b) CONCAT_(a, b)
+
+#define CHECK_COST_2(limit, lambdaCosts)                                   \
+  do {                                                                     \
+    CHECK(NoCopy::moved == (limit ? limit + 2 : 0) + lambdaCosts);         \
+    CHECK(NoCopy::moveAssigned == (limit ? limit - 1 : 0));                \
+    CHECK(NoCopy::destroyed == (limit ? limit * 2 + 1 : 0) + lambdaCosts); \
+  } while (0)
+
+#define CHECK_COST_1(a) CHECK_COST_2(a, 0)
+#define CHECK_COST(...) CONCAT(CHECK_COST_, VARGS(__VA_ARGS__))(__VA_ARGS__)
+
+#define ACESS_GEN(f)        \
+  do {                      \
+    decltype(auto) v1 = *f; \
+    decltype(auto) v2 = *f; \
+    (void)v1;               \
+    (void)v2;               \
+    (void)*f;               \
+  } while (0)
+
+auto RandomChar = []() -> char {
+  static const char charset[] =
+      "0123456789"
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      "abcdefghijklmnopqrstuvwxyz";
+  static const size_t maxIndex = (sizeof(charset) - 1);
+  return charset[std::rand() % maxIndex];
+};
+
+auto RandomString(size_t length) {
+  std::string str(length, 0);
+  std::generate_n(str.begin(), length, RandomChar);
+  return str;
 }
 
-static inline std::string readall(const char *filename) {
+auto RandomContent(size_t lines, size_t maxLineLength = 100) {
   std::stringstream ss;
-  auto file = std::ifstream(filename);
-  if (file) {
-    ss << file.rdbuf();
-    return std::move(ss.str());
+  for (auto i = 0; i < lines; ++i) {
+    auto length = std::rand() % maxLineLength;
+    std::string str(length, 0);
+    std::generate_n(str.begin(), length, RandomChar);
+    ss << str;
+    if (i < lines - 1) {
+      ss << '\n';
+    }
   }
-  return {};
+  return ss.str();
 }
 
-SCENARIO("entry is a function returning T/OptionOrRef<T> without arguments",
-         "[entry]") {
-  GIVEN("() -> a") {
-    WHEN("have an C-style function returns any value") {
-      auto d0 = hello | lz::limit(0);
-      auto d1 = hello | lz::limit(1);
-      auto d2 = hello | lz::limit(10);
+std::vector<std::string> SplitString(const std::string &input,
+                                     const std::string &regex) {
+  // passing -1 as the submatch index parameter performs splitting
+  std::regex re(regex);
+  std::sregex_token_iterator first{input.begin(), input.end(), re, -1}, last;
+  return {first, last};
+}
 
-      THEN("got the last value") {
-        REQUIRE(!d0);
-        REQUIRE(!!d1);
-        REQUIRE(!!d2);
-        REQUIRE(strcmp(*d1, *d2) == 0);
+SCENARIO("define an entry component", "[entry]") {
+  GIVEN("() -> a") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = rvalue | lz::limit(0);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
       }
     }
 
-    WHEN("have wrapped the C-style function by gen") {
-      auto d0 = lz::gen(hello) | lz::limit(0);
-      auto d1 = lz::gen(hello) | lz::limit(1);
-      auto d2 = lz::gen(hello) | lz::limit(10);
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = rvalue | lz::limit(1);
+      TypeAssert<NoCopy, NoCopy &&>(f);
 
-      THEN("got same results") {
-        REQUIRE(!d0);
-        REQUIRE(!!d1);
-        REQUIRE(!!d2);
-        REQUIRE(strcmp(*d1, *d2) == 0);
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(1);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = rvalue | lz::limit(100);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(100);
       }
     }
   }
 
-  GIVEN("(a) -> () -> b") {
-    WHEN("have a range generator") {
-      auto d0 = range(1) | lz::limit(0);
-      auto d1 = range(1) | lz::limit(10);
+  GIVEN("() -> a (wrapped by gen)") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = lz::gen(rvalue) | lz::limit(0);
+      TypeAssert<NoCopy, NoCopy &&>(f);
 
-      THEN("reaches the expected number") {
-        REQUIRE(!d0);
-        REQUIRE(!!d1);
-        REQUIRE(*d1 == 10);
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
       }
     }
 
-    WHEN("have wrapped the range lambda by gen") {
-      auto d0 = lz::gen(range(1)) | lz::limit(0);
-      auto d1 = lz::gen(range(1)) | lz::limit(10);
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = lz::gen(rvalue) | lz::limit(1);
+      TypeAssert<NoCopy, NoCopy &&>(f);
 
-      THEN("got same results") {
-        REQUIRE(!d0);
-        REQUIRE(!!d1);
-        REQUIRE(*d1 == 10);
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(1);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = lz::gen(rvalue) | lz::limit(100);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(100);
+      }
+    }
+  }
+
+  GIVEN("() -> a &") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = lvalue | lz::limit(0);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = lvalue | lz::limit(1);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = lvalue | lz::limit(100);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+  }
+
+  GIVEN("() -> a & (wrapped by gen)") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = lz::gen(lvalue) | lz::limit(0);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = lz::gen(lvalue) | lz::limit(1);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = lz::gen(lvalue) | lz::limit(100);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+  }
+
+  GIVEN("() -> a const &") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = clvalue | lz::limit(0);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = clvalue | lz::limit(1);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = clvalue | lz::limit(100);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+  }
+
+  GIVEN("() -> a const & (wrapped by gen)") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = lz::gen(clvalue) | lz::limit(0);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = lz::gen(clvalue) | lz::limit(1);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = lz::gen(clvalue) | lz::limit(100);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
       }
     }
   }
 
   GIVEN("() -> OptionalOrRef<T>") {
-    WHEN("have functions returned a non-copyable local value") {
-      THEN("got an ordinary refrence (of safety member data) if possible") {
-        auto f0 = openAndSeek10 | lz::limit(1);
-        REQUIRE(!!f0);
-        REQUIRE((*f0).good());
-        REQUIRE((*f0).tellg() == 10);
-        auto t = std::is_same<std::ifstream &,
-                              lz::detail::YieldType<decltype(*f0)>>::value;
-        REQUIRE(t);
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = roption | lz::limit(0);
+      TypeAssert<NoCopy, NoCopy &&>(f);
 
-        auto f1 = openNotExisted | lz::limit(1);
-        REQUIRE(!f1);
-
-        for (auto i = 0; i < 100; ++i) {
-          auto d = noCopy | lz::limit(1);
-          if (d) {
-            auto t = std::is_same<NoCopy &,
-                                  lz::detail::YieldType<decltype(*d)>>::value;
-            REQUIRE(t);
-            REQUIRE(((*d).s == "no copy"));
-          }
-        }
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
       }
     }
 
-    WHEN("have wrapped these functions by gen") {
-      THEN("got same results") {
-        auto f0 = lz::gen(openAndSeek10) | lz::limit(1);
-        REQUIRE(!!f0);
-        REQUIRE((*f0).good());
-        REQUIRE((*f0).tellg() == 10);
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = roption | lz::limit(1);
+      TypeAssert<NoCopy, NoCopy &&>(f);
 
-        auto t = std::is_same<std::ifstream &,
-                              lz::detail::YieldType<decltype(*f0)>>::value;
-        REQUIRE(t);
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(1);
+      }
+    }
 
-        auto f1 = openNotExisted | lz::limit(1);
-        REQUIRE(!f1);
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = roption | lz::limit(100);
+      TypeAssert<NoCopy, NoCopy &&>(f);
 
-        for (auto i = 0; i < 100; ++i) {
-          auto d = lz::gen(noCopy) | lz::limit(1);
-          if (d) {
-            auto t = std::is_same<NoCopy &,
-                                  lz::detail::YieldType<decltype(*d)>>::value;
-            REQUIRE(t);
-            REQUIRE(((*d).s == "no copy"));
-          }
-        }
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(100);
       }
     }
   }
 
-  GIVEN("(a) -> () -> OptionalOrRef<T>") {
-    WHEN("have lambdas returned a non-copyable closure variable") {
-      THEN("got an const/ordinary refrence by mutable-qualifier if possible") {
-        for (auto i = 0; i < 100; ++i) {
-          if (i % 2 == 0) {
-            auto d = noCopyByConstRef() | lz::limit(1);
-            if (d) {
-              auto t = std::is_same<const NoCopy &,
-                                    lz::detail::YieldType<decltype(*d)>>::value;
-              REQUIRE(t);
-              REQUIRE(((*d).s == "no copy"));
-            }
-          } else {
-            auto d = noCopyByRef() | lz::limit(1);
-            if (d) {
-              auto t = std::is_same<NoCopy &,
-                                    lz::detail::YieldType<decltype(*d)>>::value;
-              REQUIRE(t);
-              REQUIRE(((*d).s == "no copy"));
-            }
-          }
+  GIVEN("() -> OptionalOrRef<T> (wrapped by gen)") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = lz::gen(roption) | lz::limit(0);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = lz::gen(roption) | lz::limit(1);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(1);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = lz::gen(roption) | lz::limit(100);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(100);
+      }
+    }
+  }
+
+  GIVEN("() -> OptionalOrRef<T &>") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = loption | lz::limit(0);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = loption | lz::limit(1);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = loption | lz::limit(100);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+  }
+
+  GIVEN("() -> OptionalOrRef<T &> (wrapped by gen)") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = lz::gen(loption) | lz::limit(0);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = lz::gen(loption) | lz::limit(1);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = lz::gen(loption) | lz::limit(100);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+  }
+
+  GIVEN("() -> OptionalOrRef<const T &>") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = cloption | lz::limit(0);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = cloption | lz::limit(1);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = cloption | lz::limit(100);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+  }
+
+  GIVEN("() -> OptionalOrRef<const T &> (wrapped by gen)") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = lz::gen(cloption) | lz::limit(0);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = lz::gen(cloption) | lz::limit(1);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = lz::gen(cloption) | lz::limit(100);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0);
+      }
+    }
+  }
+
+  GIVEN("() -> () -> a") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = rvalueLambda() | lz::limit(0);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = rvalueLambda() | lz::limit(1);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(1);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = rvalueLambda() | lz::limit(100);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(100);
+      }
+    }
+  }
+
+  GIVEN("() -> () -> a (wrapped by gen)") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = lz::gen(rvalueLambda()) | lz::limit(0);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = lz::gen(rvalueLambda()) | lz::limit(1);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(1);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = lz::gen(rvalueLambda()) | lz::limit(100);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(100);
+      }
+    }
+  }
+
+  GIVEN("() -> () -> a &") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = lvalueLambda() | lz::limit(0);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        // there are additional lambda costs depend on number of components
+        CHECK_COST(0, 2);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = lvalueLambda() | lz::limit(1);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 2);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = lvalueLambda() | lz::limit(100);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 2);
+      }
+    }
+  }
+
+  GIVEN("() -> () -> a & (wrapped by gen)") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = lz::gen(lvalueLambda()) | lz::limit(0);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        // apart from the number of lambdas between pipe(|),
+        // the gen wrapper causes a movement as well
+        CHECK_COST(0, 3);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = lz::gen(lvalueLambda()) | lz::limit(1);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 3);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = lz::gen(lvalueLambda()) | lz::limit(100);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 3);
+      }
+    }
+  }
+
+  GIVEN("() -> () -> a const &") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = clvalueLambda() | lz::limit(0);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0, 2);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = clvalueLambda() | lz::limit(1);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 2);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = clvalueLambda() | lz::limit(100);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 2);
+      }
+    }
+  }
+
+  GIVEN("() -> () -> a const & (wrapped by gen)") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = lz::gen(clvalueLambda()) | lz::limit(0);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0, 3);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = lz::gen(clvalueLambda()) | lz::limit(1);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 3);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = lz::gen(clvalueLambda()) | lz::limit(100);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 3);
+      }
+    }
+  }
+
+  GIVEN("() -> () -> OptionalOrRef<T>") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = roptionLambda() | lz::limit(0);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = roptionLambda() | lz::limit(1);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(1);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = roptionLambda() | lz::limit(100);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(100);
+      }
+    }
+  }
+
+  GIVEN("() -> () -> OptionalOrRef<T> (wrapped by gen)") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = lz::gen(roptionLambda()) | lz::limit(0);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = lz::gen(roptionLambda()) | lz::limit(1);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(1);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = lz::gen(roptionLambda()) | lz::limit(100);
+      TypeAssert<NoCopy, NoCopy &&>(f);
+
+      THEN("got rvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(100);
+      }
+    }
+  }
+
+  GIVEN("() -> () -> OptionalOrRef<T &>") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = loptionLambda() | lz::limit(0);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0, 2);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = loptionLambda() | lz::limit(1);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 2);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = loptionLambda() | lz::limit(100);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 2);
+      }
+    }
+  }
+
+  GIVEN("() -> () -> OptionalOrRef<T &> (wrapped by gen)") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = lz::gen(loptionLambda()) | lz::limit(0);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0, 3);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = lz::gen(loptionLambda()) | lz::limit(1);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 3);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = lz::gen(loptionLambda()) | lz::limit(100);
+      TypeAssert<NoCopy &>(f);
+
+      THEN("got lvalue") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 3);
+      }
+    }
+  }
+
+  GIVEN("() -> () -> OptionalOrRef<const T &>") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = cloptionLambda() | lz::limit(0);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0, 2);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = cloptionLambda() | lz::limit(1);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 2);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = cloptionLambda() | lz::limit(100);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 2);
+      }
+    }
+  }
+
+  GIVEN("() -> () -> OptionalOrRef<const T &> (wrapped by gen)") {
+    WHEN("| limit 0") {
+      cleanup();
+      auto f = lz::gen(cloptionLambda()) | lz::limit(0);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got nop") {
+        REQUIRE(!f);
+        CHECK_COST(0, 3);
+      }
+    }
+
+    WHEN("| limit 1") {
+      cleanup();
+      auto f = lz::gen(cloptionLambda()) | lz::limit(1);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 3);
+      }
+    }
+
+    WHEN("| limit 100") {
+      cleanup();
+      auto f = lz::gen(cloptionLambda()) | lz::limit(100);
+      TypeAssert<const NoCopy &>(f);
+
+      THEN("got cref") {
+        REQUIRE(!!f);
+        ACESS_GEN(f);
+        CHECK_COST(0, 3);
+      }
+    }
+  }
+}
+
+SCENARIO("define an entry component to read stream into lines", "[readlines]") {
+  auto content = RandomContent(std::rand() % 1000 + 10);
+  auto lines = SplitString(content, "\n");
+
+  GIVEN("a lambda returned current line of stream") {
+    auto getline = [ss = std::istringstream(
+                        content)]() mutable -> lz::OptionOrRef<std::string> {
+      if (ss.good()) {
+        std::string line;
+        std::getline(ss, line);
+        return line;
+      }
+      return lz::nullopt;
+    };
+
+    WHEN("| limit 1") {
+      auto line = getline | lz::limit(1);
+      THEN("got the first line") {
+        REQUIRE(!!line);
+        REQUIRE(*line == lines.front());
+      }
+    }
+
+    WHEN("| limit 10") {
+      auto line = getline | lz::limit(10);
+      THEN("got the 10th line") {
+        REQUIRE(!!line);
+        REQUIRE(*line == lines[9]);
+      }
+    }
+
+    WHEN("| limit MAX") {
+      auto line = getline | lz::limit(std::numeric_limits<std::size_t>::max());
+      THEN("got the last line") {
+        REQUIRE(!!line);
+        REQUIRE(*line == lines.back());
+      }
+    }
+  }
+
+  GIVEN("a lambda returned head N lines of stream") {
+    auto headlines = [ss = std::istringstream(content),
+                      vec = std::vector<std::string>()]() mutable
+        -> lz::OptionOrRef<std::vector<std::string> &> {
+      if (ss.good()) {
+        std::string line;
+        std::getline(ss, line);
+        vec.emplace_back(std::move(line));
+        return std::ref(vec);
+      }
+      return lz::nullopt;
+    };
+
+    WHEN("| limit 1") {
+      auto head = headlines | lz::limit(1);
+      THEN("got the first line") {
+        REQUIRE(!!head);
+        REQUIRE((*head).size() == 1);
+        REQUIRE((*head).front() == lines.front());
+      }
+    }
+
+    WHEN("| limit 10") {
+      auto head = headlines | lz::limit(10);
+      THEN("got head 10 lines") {
+        REQUIRE(!!head);
+        REQUIRE((*head).size() == 10);
+        for (auto i = 0; i < 10; ++i) {
+          REQUIRE((*head)[i] == lines[i]);
         }
       }
     }
 
-    WHEN("have wrapped these lambdas by gen") {
-      THEN("got same results") {
-        for (auto i = 0; i < 100; ++i) {
-          if (i % 2 == 0) {
-            auto d = lz::gen(noCopyByConstRef()) | lz::limit(1);
-            if (d) {
-              auto t = std::is_same<const NoCopy &,
-                                    lz::detail::YieldType<decltype(*d)>>::value;
-              REQUIRE(t);
-              REQUIRE(((*d).s == "no copy"));
-            }
-          } else {
-            auto d = lz::gen(noCopyByRef()) | lz::limit(1);
-            if (d) {
-              auto t = std::is_same<NoCopy &,
-                                    lz::detail::YieldType<decltype(*d)>>::value;
-              REQUIRE(t);
-              REQUIRE(((*d).s == "no copy"));
-            }
-          }
-        }
-      }
-    }
-
-    WHEN("read a file line by line") {
-      auto f0 = readall(__FILE__);
-      auto f1 = getOneLine(__FILE__) | lz::limit(10000);
-
-      THEN("can get full content by enough limit") {
-        REQUIRE(!f0.empty());
-        REQUIRE(static_cast<bool>(f1));
-        auto i = 0;
-        for (auto &line : *f1) {
-          REQUIRE(line == f0.substr(i, line.size()));
-          i += line.size();
-        }
-      }
-    }
-
-    WHEN("read whole file at the first time") {
-      auto f0 = readall(__FILE__);
-      auto f1 = getAllLines(__FILE__) | lz::limit(1);
-
-      THEN("got full content at once") {
-        REQUIRE(!f0.empty());
-        REQUIRE(!!f1);
-        auto i = 0;
-        for (auto &line : *f1) {
-          REQUIRE(line == f0.substr(i, line.size()));
-          i += line.size();
-        }
-      }
-    }
-
-    WHEN("have wrapped these file readers by gen") {
-      auto f0 = readall(__FILE__);
-      auto f1 = lz::gen(getOneLine(__FILE__)) | lz::limit(10000);
-      auto f2 = lz::gen(getAllLines(__FILE__)) | lz::limit(1);
-
-      THEN("got same results") {
-        REQUIRE(!f0.empty());
-        REQUIRE(!!f1);
-        REQUIRE(!!f2);
-
-        auto i = 0;
-        for (auto &line : *f1) {
-          REQUIRE(line == f0.substr(i, line.size()));
-          i += line.size();
-        }
-
-        i = 0;
-        for (auto &line : *f2) {
-          REQUIRE(line == f0.substr(i, line.size()));
-          i += line.size();
+    WHEN("| limit MAX") {
+      auto head =
+          headlines | lz::limit(std::numeric_limits<std::size_t>::max());
+      THEN("got all lines") {
+        REQUIRE(!!head);
+        REQUIRE((*head).size() == lines.size());
+        for (auto i = 0; i < lines.size(); ++i) {
+          REQUIRE((*head)[i] == lines[i]);
         }
       }
     }
