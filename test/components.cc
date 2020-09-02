@@ -39,14 +39,15 @@ std::size_t NoCopy::moved = 0;
 std::size_t NoCopy::moveAssigned = 0;
 std::size_t NoCopy::destroyed = 0;
 
+static NoCopy nc;
+
 static inline void cleanup() {
+  nc.data.clear();
   NoCopy::created = 0;
   NoCopy::moved = 0;
   NoCopy::moveAssigned = 0;
   NoCopy::destroyed = 0;
 }
-
-static NoCopy nc;
 
 static NoCopy rvalue() { return NoCopy{}; }
 static NoCopy &lvalue() { return nc; }
@@ -119,7 +120,7 @@ static constexpr void TypeAssert(std::false_type) {
 template <typename T, typename Gen,
           lz::detail::EnableIfType<lz::detail::GeneratorBase, Gen> = 0>
 static constexpr void TypeAssert(Gen &gen) {
-  TypeAssert<T, typename lz::detail::RmRef<Gen>::YieldType>();
+  TypeAssert<T, typename lz::detail::RmRef<Gen>::SubmitType>();
 }
 
 #define CHECK_ACCESS(lives, cost)                                    \
@@ -196,9 +197,9 @@ std::string Show(Args &&... args) {
 
 SCENARIO("examine the YieldType on Generator", "[yieldType]") {
   GIVEN("function pointers") {
-#define TA(T, F, V) \
-  TypeAssert<       \
-      T, typename lz::Generator<decltype(&std::declval<F>()), V>::YieldType>()
+#define TA(T, F, V)                                                          \
+  TypeAssert<T, typename lz::detail::Generator<decltype(&std::declval<F>()), \
+                                               V>::SubmitType>()
 
     WHEN("passing by value") {
       TA(int, int(int), int);
@@ -249,11 +250,14 @@ SCENARIO("examine the YieldType on Generator", "[yieldType]") {
       TA(const NoCopy &, lz::Optional<const NoCopy &>(), void);
       TA(NoCopy &, lz::Optional<lz::Optional<NoCopy &>>(), void);
 
-      TA(std::false_type, lz::Optional<NoCopy> & (), void);
-      TA(std::false_type, const lz::Optional<NoCopy> &(), void);
-      TA(std::false_type, lz::Optional<lz::Optional<NoCopy &> &>(), void);
-      TA(std::false_type, const lz::Optional<lz::Optional<NoCopy &> &> &(),
+      TA(lz::detail::NeverYieldNonValuedOptionalType, lz::Optional<NoCopy> & (),
          void);
+      TA(lz::detail::NeverYieldNonValuedOptionalType,
+         const lz::Optional<NoCopy> &(), void);
+      TA(lz::detail::NeverYieldNonValuedOptionalType,
+         lz::Optional<lz::Optional<NoCopy &> &>(), void);
+      TA(lz::detail::NeverYieldNonValuedOptionalType,
+         const lz::Optional<lz::Optional<NoCopy &> &> &(), void);
 
       THEN("cannot return lvalue reference of Optional itself") {}
     }
@@ -262,10 +266,12 @@ SCENARIO("examine the YieldType on Generator", "[yieldType]") {
       TA(NoCopy &&, NoCopy && (), void);
       TA(const NoCopy &&, const NoCopy && (), void);
 
-      TA(std::false_type, lz::Optional<NoCopy> && (), void);
-      TA(std::false_type, const lz::Optional<NoCopy> && (), void);
-      TA(std::false_type, const lz::Optional<lz::Optional<NoCopy &&> &&> && (),
-         void);
+      TA(lz::detail::NeverYieldNonValuedOptionalType,
+         lz::Optional<NoCopy> && (), void);
+      TA(lz::detail::NeverYieldNonValuedOptionalType,
+         const lz::Optional<NoCopy> && (), void);
+      TA(lz::detail::NeverYieldNonValuedOptionalType,
+         const lz::Optional<lz::Optional<NoCopy &&> &&> && (), void);
 
       THEN("cannot return rvalue reference of Optional itself") {}
     }
@@ -275,10 +281,11 @@ SCENARIO("examine the YieldType on Generator", "[yieldType]") {
 
   GIVEN("lambdas") {
 #define L(R, A) ([](A) { return R{}; })
-#define TA(T, F, V)                                                      \
-  do {                                                                   \
-    auto _x = F;                                                         \
-    TypeAssert<T, typename lz::Generator<decltype(_x), V>::YieldType>(); \
+#define TA(T, F, V)                                                            \
+  do {                                                                         \
+    auto _x = F;                                                               \
+    TypeAssert<T,                                                              \
+               typename lz::detail::Generator<decltype(_x), V>::SubmitType>(); \
   } while (0)
 
     WHEN("passing by value") {
@@ -321,7 +328,7 @@ SCENARIO("examine the YieldType on Generator", "[yieldType]") {
 SCENARIO("try possible cases on overloaded genApply functions", "[genApply]") {
   GIVEN("lambdas") {
 #define TA(a, b, c) \
-  TypeAssert<a, decltype(lz::detail::genApply(b, lz::generator(c)))>()
+  TypeAssert<a, decltype(lz::detail::genApply(b, lz::detail::generator(c)))>()
 
     auto Rv = [] { return NoCopy{}; };
     auto LvRef = []() -> NoCopy & { return nc; };
@@ -1139,7 +1146,7 @@ SCENARIO("define an entry component to read stream into lines", "[readlines]") {
   }
 }
 
-SCENARIO("define a simple middle component", "[simpleMiddle]") {
+SCENARIO("define a simple middle component", "[middle]") {
   GIVEN("(a) -> b") {
     WHEN("previous output is rvalue") {
       cleanup();
@@ -1166,7 +1173,7 @@ SCENARIO("define a simple middle component", "[simpleMiddle]") {
       cleanup();
       auto previous = lz::gen(lvalue);
 
-      THEN("either this input is lvalue") {
+      THEN("either this input is ref") {
         auto f = previous | lvfilter | lz::limit(1);
         TypeAssert<NoCopy &>(f);
         REQUIRE(!!f);
@@ -1183,7 +1190,7 @@ SCENARIO("define a simple middle component", "[simpleMiddle]") {
       }
     }
 
-    WHEN("previous output is const ref") {
+    WHEN("previous output is const lvalue") {
       cleanup();
       auto previous = lz::gen(clvalue);
 
@@ -1196,7 +1203,7 @@ SCENARIO("define a simple middle component", "[simpleMiddle]") {
       }
     }
 
-    WHEN("previous output is rvalue of option") {
+    WHEN("previous output is optional of rvalue") {
       cleanup();
       auto previous = lz::gen(roption);
 
@@ -1216,11 +1223,98 @@ SCENARIO("define a simple middle component", "[simpleMiddle]") {
         CHECK_ACCESS(1, 4);
       }
     }
+
+    WHEN("previous output is optional of lvalue") {
+      cleanup();
+      auto previous = lz::gen(loption);
+
+      THEN("either this input is ref") {
+        auto f = previous | lvfilter | lz::limit(1);
+        TypeAssert<NoCopy &>(f);
+        REQUIRE(!!f);
+        REQUIRE((*f).data == ":filtered");
+        CHECK_ACCESS(0, 0);
+      }
+
+      THEN("or this input is const ref") {
+        auto f = previous | clvfilter | lz::limit(1);
+        TypeAssert<NoCopy>(f);
+        REQUIRE(!!f);
+        REQUIRE((*f).data == ":filtered");
+        CHECK_ACCESS(1, 2);
+      }
+    }
+
+    WHEN("previous output is optional of const lvalue") {
+      cleanup();
+      auto previous = lz::gen(cloption);
+
+      THEN("this input has to be const ref as well") {
+        auto f = previous | clvfilter | lz::limit(1);
+        TypeAssert<NoCopy>(f);
+        REQUIRE(!!f);
+        REQUIRE((*f).data == ":filtered");
+        CHECK_ACCESS(1, 2);
+      }
+    }
   }
 }
 
-// TODO: type conversion
-// TODO: go off until got a value
-// TODO: unpack to multiple parametered function
+template <typename T>
+auto until(T &&status) {
+  return
+      [status, reached = false](auto &&gen) mutable -> decltype(lz::next(gen)) {
+        auto val = lz::next(gen);
+        if (reached || !val) {
+          return {};
+        }
 
-SCENARIO("define a complex middle component", "[complexMiddle]") {}
+        reached = *val == status;
+        return val;
+      };
+}
+
+template <typename T>
+auto iterate(const std::initializer_list<T> &list) {
+  return [begin = list.begin(), end = list.end()]() mutable -> lz::Optional<T> {
+    if (begin != end) {
+      return *begin++;
+    }
+    return lz::nullopt;
+  };
+}
+
+template <typename T>
+auto allTheSame() {
+  return lz::gen([p = T{}, init = T{}](const T &data) mutable {
+    if (p == init) {
+      p = data;
+      return true;
+    }
+
+    return p == data;
+  });
+};
+
+SCENARIO("define complex middleware components", "[middleware]") {
+  GIVEN("The same old song") {
+    auto middleware = allTheSame<std::string>() | until(false);
+
+    WHEN("all the same") {
+      auto f = iterate({"same old", "same old"}) | middleware;
+      REQUIRE(!!f);
+
+      THEN("got true") { REQUIRE(*f); }
+    }
+
+    WHEN("not all the same") {
+      auto f =
+          iterate({"same old", "same old", "xxx", "same old"}) | middleware;
+      REQUIRE(!!f);
+
+      THEN("got false") { REQUIRE(!*f); }
+    }
+  }
+
+  GIVEN("The I in our team") {}
+}
