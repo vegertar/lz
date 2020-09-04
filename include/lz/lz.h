@@ -1,12 +1,16 @@
 #pragma once
 
+#include <iterator>
 #include <type_traits>
+#include <utility>
 
 #if __cplusplus >= 201703L
 #include <optional>
 #else
 #include "nonstd/optional.hpp"
 #endif
+
+#define LZ_VERSION "0.0.1"
 
 namespace lz {
 
@@ -25,17 +29,18 @@ using nonstd::optional;
 namespace detail {
 
 struct OptionalBase {};
-struct GeneratorBase {};
-struct MiddlewareBase {};
+struct ComponentBase {};
+struct GeneratorBase : ComponentBase {};
+struct MiddlewareBase : ComponentBase {};
 
 template <typename T>
 struct RvRefToVal {
-  typedef T type;
+  using type = T;
 };
 
 template <typename T>
 struct RvRefToVal<T &&> {
-  typedef T type;
+  using type = T;
 };
 
 template <typename T>
@@ -43,9 +48,6 @@ using RmRvRef = typename RvRefToVal<T>::type;
 
 template <typename T>
 using RmRef = typename std::remove_reference<T>::type;
-
-// template <typename T>
-// using RmPtr = typename std::remove_pointer<T>::type;
 
 template <typename T1, typename T2>
 using EnableIfType =
@@ -61,30 +63,6 @@ using EnableIfSame = std::enable_if_t<std::is_same<T1, RmRef<T2>>::value, int>;
 template <typename T1, typename T2>
 using EnableIfNotSame =
     std::enable_if_t<!std::is_same<T1, RmRef<T2>>::value, int>;
-
-// template <typename T1, typename T2>
-// using EnableIfConv =
-//     std::enable_if_t<std::is_convertible<T1, RmRef<T2>>::value, int>;
-
-// template <typename T1, typename T2>
-// using EnableIfNotConv =
-//     std::enable_if_t<!std::is_convertible<T1, RmRef<T2>>::value, int>;
-
-// template <typename T>
-// using EnableIfLvRef = std::enable_if_t<std::is_lvalue_reference<T>::value,
-// int>;
-
-// template <typename T>
-// using EnableIfNotLvRef =
-//     std::enable_if_t<!std::is_lvalue_reference<T>::value, int>;
-
-// template <typename T>
-// using EnableIfRvRef = std::enable_if_t<std::is_rvalue_reference<T>::value,
-// int>;
-
-// template <typename T>
-// using EnableIfNotRvRef =
-//     std::enable_if_t<!std::is_rvalue_reference<T>::value, int>;
 
 template <typename T>
 using EnableIfFunc = std::enable_if_t<std::is_function<RmRef<T>>::value, int>;
@@ -116,21 +94,31 @@ struct Optional<T &> : public optionalref<T>, detail::OptionalBase {
   decltype(auto) operator*() { return optionalref<T>::operator*().get(); }
 };
 
+template <typename T>
+struct Optional<std::reference_wrapper<T>> : public Optional<T &> {
+  Optional() = default;
+  Optional(nullopt_t) {}
+  Optional(T &t) : Optional<T &>(t) {}
+  Optional(std::reference_wrapper<T> t) : Optional<T &>(t) {}
+
+  decltype(auto) operator*() { return Optional<T &>::operator*(); }
+};
+
 namespace detail {
 
 template <typename T>
 struct YieldTypeImpl {
-  typedef T type;
+  using type = T;
 };
 
 template <typename T>
 struct YieldTypeImpl<Optional<T>> {
-  typedef typename YieldTypeImpl<T>::type type;
+  using type = typename YieldTypeImpl<T>::type;
 };
 
 template <typename T>
 struct YieldTypeImpl<Optional<T &&>> {
-  typedef typename YieldTypeImpl<T>::type type;
+  using type = typename YieldTypeImpl<T>::type;
 };
 
 //
@@ -141,22 +129,22 @@ struct NeverYieldNonValuedOptionalType {};
 
 template <typename T>
 struct YieldTypeImpl<Optional<T> &> {
-  typedef NeverYieldNonValuedOptionalType type;
+  using type = NeverYieldNonValuedOptionalType;
 };
 
 template <typename T>
 struct YieldTypeImpl<const Optional<T> &> {
-  typedef NeverYieldNonValuedOptionalType type;
+  using type = NeverYieldNonValuedOptionalType;
 };
 
 template <typename T>
 struct YieldTypeImpl<Optional<T> &&> {
-  typedef NeverYieldNonValuedOptionalType type;
+  using type = NeverYieldNonValuedOptionalType;
 };
 
 template <typename T>
 struct YieldTypeImpl<const Optional<T> &&> {
-  typedef NeverYieldNonValuedOptionalType type;
+  using type = NeverYieldNonValuedOptionalType;
 };
 
 template <typename T>
@@ -185,6 +173,67 @@ auto apply(Gen &gen, Optional<typename Gen::SubmitType> &res) {
   }
 }
 
+template <bool, typename = void>
+struct UseIf {
+  using type = void;
+};
+
+template <typename T>
+struct UseIf<true, T> {
+  using type = T;
+};
+
+template <typename T>
+using UseVoidIfOptional =
+    typename UseIf<!std::is_base_of<OptionalBase, RmRef<T>>::value, T>::type;
+
+template <typename Gen>
+class Iterator : public std::iterator<std::forward_iterator_tag,
+                                      typename detail::RmRef<Gen>::SubmitType> {
+ public:
+  Iterator() : ended(true) {}
+  explicit Iterator(Gen *g) : gen(g) {
+    if (gen) {
+      step();
+    }
+  }
+
+  decltype(auto) operator*() { return *(gen->value); }
+
+  auto operator==(const Iterator &other) {
+    if (ended == other.ended) {
+      return ended || (gen == other.gen);
+    }
+    return false;
+  }
+  auto operator!=(const Iterator &other) { return !operator==(other); }
+
+  Iterator &operator++() {
+    step();
+    return *this;
+  }
+
+ private:
+  void step() {
+    if (ended) {
+      return;
+    }
+
+    gen->value = next(*gen);
+    if (!(gen->value)) {
+      ended = true;
+    } else {
+      ++n;
+    }
+  }
+
+  Gen *gen = nullptr;
+  std::size_t n = 0;
+  bool ended = false;
+};
+
+using Void = void;
+
 template <typename Func, typename Mem>
 class Generator;
 
@@ -193,14 +242,22 @@ class Generator : public GeneratorBase {
  public:
   // Generator is designed to be used as a middleware, so the data
   // must not be rvalue references.
-  typedef RmRvRef<Func> FuncType;
-  typedef RmRvRef<Mem> MemType;
+  using FuncType = RmRvRef<Func>;
+  using MemType = RmRvRef<Mem>;
 
   // InvokeType is the returning type of operator()
-  typedef ResultType<FuncType &, MemType &> InvokeType;
+  using InvokeType = ResultType<FuncType &, MemType &>;
 
   // SubmitType is the underlying data type never be an Optional
-  typedef YieldType<InvokeType> SubmitType;
+  using SubmitType = YieldType<InvokeType>;
+
+  // Ordinary forward iterator
+  using iterator = Iterator<Generator>;
+
+  template <typename F, typename M>
+  struct Rebind {
+    using type = Generator<F, M>;
+  };
 
   template <typename F, typename T>
   Generator(F &&producer, T &&member) noexcept
@@ -208,8 +265,10 @@ class Generator : public GeneratorBase {
 
   decltype(auto) operator()() { return producer(member); }
 
-  // use boolean expression as a way of evaluation & validation
-  operator bool() {
+  operator UseVoidIfOptional<InvokeType>() && { return operator()(); }
+
+  // use boolean cast under lvalue scenes as a way of evaluation & validation
+  operator bool() & {
     if (!applied) {
       apply(*this, value);
       applied = true;
@@ -218,31 +277,41 @@ class Generator : public GeneratorBase {
   }
 
   // forces to retrieve value on lvalue case only
-  const auto &operator*() & {
-    this->operator bool();
-    return *value;
-  }
+  const auto &operator*() & { return *value; }
+
+  auto begin() { return iterator{this}; }
+  auto end() { return iterator{}; }
 
  private:
   FuncType producer;
   MemType member;
   Optional<SubmitType> value;
   bool applied = false;
+
+  friend iterator;
 };
 
 template <typename Func>
-class Generator<Func, void> : public GeneratorBase {
+class Generator<Func, Void> : public GeneratorBase {
  public:
-  typedef RmRvRef<Func> FuncType;
-  typedef ResultType<FuncType &> InvokeType;
-  typedef YieldType<InvokeType> SubmitType;
+  using FuncType = RmRvRef<Func>;
+  using InvokeType = ResultType<FuncType &>;
+  using SubmitType = YieldType<InvokeType>;
+  using iterator = Iterator<Generator>;
+
+  template <typename F, typename M>
+  struct Rebind {
+    using type = Generator<F, M>;
+  };
 
   template <typename F>
   Generator(F &&producer) noexcept : producer(std::forward<F>(producer)) {}
 
   decltype(auto) operator()() { return producer(); }
 
-  operator bool() {
+  operator UseVoidIfOptional<InvokeType>() && { return operator()(); }
+
+  operator bool() & {
     if (!applied) {
       apply(*this, value);
       applied = true;
@@ -250,22 +319,29 @@ class Generator<Func, void> : public GeneratorBase {
     return static_cast<bool>(value);
   }
 
-  const auto &operator*() & {
-    this->operator bool();
-    return *value;
-  }
+  const auto &operator*() & { return *value; }
+
+  auto begin() { return iterator{this}; }
+  auto end() { return iterator{}; }
 
  private:
   FuncType producer;
   Optional<SubmitType> value;
   bool applied = false;
+
+  friend iterator;
 };
 
 template <typename Func, typename Mem>
 class Middleware : public MiddlewareBase {
  public:
-  typedef RmRvRef<Func> FuncType;
-  typedef RmRvRef<Mem> MemType;
+  using FuncType = RmRvRef<Func>;
+  using MemType = RmRvRef<Mem>;
+
+  template <typename F, typename M>
+  struct Rebind {
+    using type = Middleware<F, M>;
+  };
 
   template <typename F, typename T>
   Middleware(F &&producer, T &&member) noexcept
@@ -273,16 +349,17 @@ class Middleware : public MiddlewareBase {
 
   template <typename T>
   inline auto compose(T &&t) & {
-    typedef decltype(member.compose(std::forward<T>(t))) GenType;
-    return Generator<FuncType, GenType>(producer,
-                                        member.compose(std::forward<T>(t)));
+    using MemType = decltype(member.compose(std::forward<T>(t)));
+    using R = typename T::Rebind<FuncType, MemType>::type;
+    return R(producer, member.compose(std::forward<T>(t)));
   }
 
   template <typename T>
   inline auto compose(T &&t) && {
-    typedef decltype(member.compose(std::forward<T>(t))) GenType;
-    return Generator<FuncType, GenType>(
-        std::move(producer), std::move(member).compose(std::forward<T>(t)));
+    using MemType = decltype(member.compose(std::forward<T>(t)));
+    using R = typename T::Rebind<FuncType, MemType>::type;
+    return R(std::move(producer),
+             std::move(member).compose(std::forward<T>(t)));
   }
 
  private:
@@ -291,21 +368,28 @@ class Middleware : public MiddlewareBase {
 };
 
 template <typename Func>
-class Middleware<Func, void> : public MiddlewareBase {
+class Middleware<Func, Void> : public MiddlewareBase {
  public:
-  typedef RmRvRef<Func> FuncType;
+  using FuncType = RmRvRef<Func>;
+
+  template <typename F, typename M>
+  struct Rebind {
+    using type = Middleware<F, M>;
+  };
 
   template <typename F>
   Middleware(F &&producer) noexcept : producer(std::forward<F>(producer)) {}
 
   template <typename T>
   inline auto compose(T &&t) & {
-    return Generator<FuncType, T>(producer, std::forward<T>(t));
+    using R = typename T::Rebind<FuncType, T>::type;
+    return R(producer, std::forward<T>(t));
   }
 
   template <typename T>
   inline auto compose(T &&t) && {
-    return Generator<FuncType, T>(std::move(producer), std::forward<T>(t));
+    using R = typename T::Rebind<FuncType, T>::type;
+    return R(std::move(producer), std::forward<T>(t));
   }
 
  private:
@@ -327,11 +411,17 @@ inline GenYieldType<Func, Gen> genApply(Func &&f, Gen &&g) {
     return {};
   }
 
+  // Since val is lvalue and declare(*val) is lvalue-reference,
+  // if we directly perfect forwarding *val, which is a reference
+  // of a local variable, to f then might be causing danger,
+  // so use SubmitType to forward.
+  using YieldType = typename RmRef<Gen>::SubmitType;
+
   // The GenYieldType use f(T &) to deduce return type,
-  // and the returning code here, force to invoke with forwarded argument,
-  // which means either Func's parameter is const T &,
-  // or Gen::InvokeType is Optional<T &>.
-  typedef typename RmRef<Gen>::SubmitType YieldType;
+  // and the code here, force to invoke with forwarded argument,
+  // which means to avoid one additional movement,
+  // either Func's parameter is const T &,
+  // or Gen::SubmitType is T &.
   return std::forward<Func>(f)(std::forward<YieldType>(*val));
 }
 
@@ -355,12 +445,12 @@ inline auto genApply(Func &&, Param &&...) {
 
 template <typename F, EnableIfNotType<MiddlewareBase, ResultType<F>> = 0>
 inline auto generator(F &&f) {
-  return Generator<F, void>(std::forward<F>(f));
+  return Generator<F, Void>(std::forward<F>(f));
 }
 
 template <typename F, EnableIfType<MiddlewareBase, ResultType<F>> = 0>
 inline auto generator(F &&f) {
-  return Middleware<F, void>{std::forward<F>(f)};
+  return Middleware<F, Void>{std::forward<F>(f)};
 }
 
 template <typename F, typename T, EnableIfNotType<MiddlewareBase, F> = 0>
@@ -380,13 +470,31 @@ inline auto generator(F &&f, T &&t) {
 }  // namespace detail
 
 // gen gives the target function an Optional wrapper if possible.
-template <typename Func, detail::EnableIfNotFunc<Func> = 0>
+// But if you wanna handle Generator yourself, e.g. a lambda defined as
+//
+//   [](auto &&gen) -> decltype(lz::next(gen)) {
+//     auto val = lz::next(gen);
+//     if (!val) { return {}; }
+//
+//     decltype(auto) data = *val;
+//     ...
+//   }
+//
+// DON't wrap it with lz::gen, which doesn't work, just piping(|) directly.
+template <typename Func, detail::EnableIfNotFunc<Func> = 0,
+          detail::EnableIfNotType<detail::ComponentBase, Func> = 0>
 inline auto gen(Func &&f) noexcept {
   return
       [f = std::forward<Func>(f)](auto &&... param) mutable -> decltype(auto) {
         return detail::genApply(std::forward<Func>(f),
                                 std::forward<decltype(param)>(param)...);
       };
+}
+
+template <typename Func, detail::EnableIfNotFunc<Func> = 0,
+          detail::EnableIfType<detail::ComponentBase, Func> = 0>
+inline auto gen(Func &&f) noexcept {
+  return std::forward<Func>(f);
 }
 
 template <typename Func, detail::EnableIfFunc<Func> = 0>
@@ -404,8 +512,6 @@ inline auto limit(std::size_t n) noexcept {
   };
 }
 
-namespace detail {}  // namespace detail
-
 template <typename In, typename Out,
           detail::EnableIfType<detail::GeneratorBase, In> = 0>
 inline auto operator|(In &&in, Out &&out) noexcept {
@@ -414,12 +520,20 @@ inline auto operator|(In &&in, Out &&out) noexcept {
 
 template <typename In, typename Out,
           detail::EnableIfNotType<detail::GeneratorBase, In> = 0,
-          detail::EnableIfType<detail::MiddlewareBase, In> = 0>
+          detail::EnableIfType<detail::MiddlewareBase, In> = 0,
+          detail::EnableIfNotType<detail::MiddlewareBase, Out> = 0>
 inline auto operator|(In &&in, Out &&out) noexcept {
   return detail::Middleware<Out, In>(std::forward<Out>(out),
                                      std::forward<In>(in));
 }
-// TODO: if Out is Middleware
+
+template <typename In, typename Out,
+          detail::EnableIfNotType<detail::GeneratorBase, In> = 0,
+          detail::EnableIfType<detail::MiddlewareBase, In> = 0,
+          detail::EnableIfType<detail::MiddlewareBase, Out> = 0>
+inline auto operator|(In &&in, Out &&out) noexcept {
+  return std::forward<Out>(out).compose(std::forward<In>(in));
+}
 
 template <typename In, typename Out,
           detail::EnableIfNotType<detail::GeneratorBase, In> = 0,
@@ -437,6 +551,12 @@ inline auto operator|(InR (*in)(InA...), Out &&out) noexcept {
 template <typename In, typename OutR, typename... OutA>
 inline auto operator|(In &&in, OutR (*out)(OutA...)) noexcept {
   return operator|(std::forward<In>(in), gen(out));
+}
+
+template <typename Func, typename... Args>
+inline auto gen(Func &&f, Args &&... args) {
+  return operator|(gen(std::forward<Func>(f)),
+                   gen(std::forward<Args>(args)...));
 }
 
 }  // namespace lz

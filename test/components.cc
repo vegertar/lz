@@ -8,6 +8,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <list>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -167,35 +168,190 @@ std::vector<std::string> SplitString(const std::string &input,
   return {first, last};
 }
 
+template <typename T>
+struct has_const_iterator {
+ private:
+  typedef char yes;
+  typedef struct {
+    char array[2];
+  } no;
+
+  template <typename C>
+  static yes test(typename C::const_iterator *);
+  template <typename C>
+  static no test(...);
+
+ public:
+  static const bool value = sizeof(test<T>(0)) == sizeof(yes);
+  typedef T type;
+};
+
+template <typename T>
+struct has_begin_end {
+  template <typename C>
+  static char (
+      &f(typename std::enable_if<
+          std::is_same<decltype(static_cast<typename C::const_iterator (C::*)()
+                                                const>(&C::begin)),
+                       typename C::const_iterator (C::*)() const>::value,
+          void>::type *))[1];
+
+  template <typename C>
+  static char (&f(...))[2];
+
+  template <typename C>
+  static char (
+      &g(typename std::enable_if<
+          std::is_same<decltype(static_cast<typename C::const_iterator (C::*)()
+                                                const>(&C::end)),
+                       typename C::const_iterator (C::*)() const>::value,
+          void>::type *))[1];
+
+  template <typename C>
+  static char (&g(...))[2];
+
+  static bool const beg_value = sizeof(f<T>(0)) == 1;
+  static bool const end_value = sizeof(g<T>(0)) == 1;
+};
+
+template <typename T>
+struct is_container
+    : std::integral_constant<bool, has_const_iterator<T>::value &&
+                                       has_begin_end<T>::beg_value &&
+                                       has_begin_end<T>::end_value> {};
+
 template <typename Stream, typename Arg,
-          lz::detail::EnableIfType<std::ostringstream, Stream> = 0>
-Stream &Show(Stream &out, Arg &&arg) {
-  out << std::forward<Arg>(arg) << ", ";
+          lz::detail::EnableIfType<std::ostringstream, Stream> = 0,
+          std::enable_if_t<!is_container<Arg>::value, int> = 0>
+Stream &ShowCont(Stream &out, const Arg &arg, const std::string &cont) {
+  out << arg << cont;
+  return out;
+}
+
+template <typename Stream, typename Arg,
+          lz::detail::EnableIfType<std::ostringstream, Stream> = 0,
+          std::enable_if_t<is_container<Arg>::value, int> = 0>
+Stream &ShowCont(Stream &out, const Arg &arg, const std::string &cont) {
+  for (auto &item : arg) {
+    out << item << cont;
+  }
   return out;
 }
 
 template <typename Stream, typename T,
           lz::detail::EnableIfType<std::ostringstream, Stream> = 0>
-Stream &Show(Stream &out, std::initializer_list<T> &&arg) {
-  std::ostream_iterator<T> it(out, ", ");
-  std::copy(std::begin(arg), std::end(arg), it);
+Stream &ShowCont(Stream &out, const std::initializer_list<T> &arg,
+                 const std::string &cont) {
+  for (auto &item : arg) {
+    out << item << cont;
+  }
   return out;
 }
 
 template <typename... Args>
-std::string Show(Args &&... args) {
+std::string ShowCont(const std::string &cont, Args &&... args) {
   std::ostringstream out;
-  // Show(out, std::forward<Arg>(arg));
   using expander = int[];
-  (void)expander{0, (void(Show(out, std::forward<Args>(args))), 0)...};
+  (void)expander{0,
+                 (void(ShowCont(out, std::forward<Args>(args), cont)), 0)...};
   auto s = out.str();
   if (!s.empty()) {
-    s.resize(s.size() - 2);
+    s.resize(s.size() - cont.size());
   }
   return s;
 }
 
-SCENARIO("examine the YieldType on Generator", "[yieldType]") {
+SCENARIO("examine the InvokeType on Generator", "[invokeType]") {
+  GIVEN("entry generators") {
+#define TA(T, F)                                \
+  do {                                          \
+    auto g = lz::detail::generator(lz::gen(F)); \
+    TypeAssert<T, decltype(g)::InvokeType>();   \
+  } while (0)
+
+    TA(NoCopy, rvalue);
+    TA(NoCopy &, lvalue);
+    TA(const NoCopy &, clvalue);
+
+    TA(lz::Optional<NoCopy>, roption);
+    TA(lz::Optional<NoCopy &>, loption);
+    TA(lz::Optional<const NoCopy &>, cloption);
+  }
+
+  GIVEN("2 components") {
+#undef TA
+#define TA(T, F1, F2)                         \
+  do {                                        \
+    auto g = lz::gen(F1) | F2;                \
+    TypeAssert<T, decltype(g)::InvokeType>(); \
+  } while (0)
+
+    TA(NoCopy, rvalue, rvfilter);
+    TA(NoCopy &, lvalue, lvfilter);
+    TA(NoCopy, clvalue, clvfilter);
+
+    TA(lz::Optional<NoCopy>, roption, clvfilter);
+    TA(lz::Optional<NoCopy>, roption, rvofilter);
+    TA(lz::Optional<NoCopy>, rvalue, rvofilter);
+  }
+
+  GIVEN("3 components") {
+    WHEN("a | b | c") {
+#undef TA
+#define TA(T, F1, F2, F3)                     \
+  do {                                        \
+    auto g = lz::gen(F1) | F2 | F3;           \
+    TypeAssert<T, decltype(g)::InvokeType>(); \
+  } while (0)
+
+      TA(NoCopy, rvalue, rvfilter, clvfilter);
+      TA(lz::Optional<NoCopy>, rvalue, rvofilter, clvfilter);
+      TA(lz::Optional<NoCopy>, roption, clvfilter, clvfilter);
+    }
+
+    WHEN("a | (b | c)") {
+#undef TA
+#define TA(T, F1, F2, F3)                     \
+  do {                                        \
+    auto g = lz::gen(F1);                     \
+    auto m = lz::gen(F2) | F3;                \
+    auto h = g | m;                           \
+    TypeAssert<T, decltype(h)::InvokeType>(); \
+  } while (0)
+
+      TA(NoCopy, rvalue, rvfilter, clvfilter);
+      TA(lz::Optional<NoCopy>, rvalue, rvofilter, clvfilter);
+      TA(lz::Optional<NoCopy>, roption, clvfilter, clvfilter);
+    }
+  }
+
+  GIVEN("5 components") {
+    auto a = []() { return 0; };
+    auto b = [](int x) { return x + 1; };
+    auto c = [](int x) { return x * 3; };
+    auto d = [](int x) { return x / 2; };
+    auto e = [](int x) { return x - 1; };
+
+    WHEN("a | b | c | d | e") {
+      int x = lz::gen(a, b, c, d, e);
+      REQUIRE(x == 0);
+    }
+
+    WHEN("a | (b | c) | (d | e)") {
+      int x = lz::gen(a, lz::gen(b, c), lz::gen(d, e));
+      REQUIRE(x == 0);
+    }
+
+    WHEN("a | (b | c | d) | e") {
+      int x = lz::gen(a, lz::gen(b, c, d), e);
+      REQUIRE(x == 0);
+    }
+  }
+}
+
+#undef TA
+
+SCENARIO("examine the SubmitType on Generator", "[submitType]") {
   GIVEN("function pointers") {
 #define TA(T, F, V)                                                          \
   TypeAssert<T, typename lz::detail::Generator<decltype(&std::declval<F>()), \
@@ -223,55 +379,57 @@ SCENARIO("examine the YieldType on Generator", "[yieldType]") {
     }
 
     WHEN("passing by rvalue reference") {
-      TA(int, int(), void);
+      TA(int, int(), lz::detail::Void);
       TA(int, int(lz::Optional<NoCopy &&>), lz::nullopt_t);
 
       THEN("only nullopt is allowed to pass when using Optional") {}
     }
 
     WHEN("returning a value") {
-      TA(NoCopy, NoCopy(), void);
-      TA(const NoCopy, const NoCopy(), void);
-      TA(NoCopy, lz::Optional<NoCopy>(), void);
-      TA(NoCopy, lz::Optional<NoCopy &&>(), void);
-      TA(NoCopy, lz::Optional<lz::Optional<NoCopy>>(), void);
-      TA(NoCopy, lz::Optional<lz::Optional<NoCopy &&> &&>(), void);
-      TA(lz::optional<NoCopy>, lz::Optional<lz::optional<NoCopy>>(), void);
+      TA(NoCopy, NoCopy(), lz::detail::Void);
+      TA(const NoCopy, const NoCopy(), lz::detail::Void);
+      TA(NoCopy, lz::Optional<NoCopy>(), lz::detail::Void);
+      TA(NoCopy, lz::Optional<NoCopy &&>(), lz::detail::Void);
+      TA(NoCopy, lz::Optional<lz::Optional<NoCopy>>(), lz::detail::Void);
+      TA(NoCopy, lz::Optional<lz::Optional<NoCopy &&> &&>(), lz::detail::Void);
+      TA(lz::optional<NoCopy>, lz::Optional<lz::optional<NoCopy>>(),
+         lz::detail::Void);
       TA(lz::optionalref<NoCopy>, lz::Optional<lz::optionalref<NoCopy>>(),
-         void);
+         lz::detail::Void);
 
       THEN("could return by either original type or Optional wrapper") {}
     }
 
     WHEN("returning a lvalue reference") {
-      TA(NoCopy &, NoCopy & (), void);
-      TA(const NoCopy &, const NoCopy &(), void);
-      TA(NoCopy &, lz::Optional<NoCopy &>(), void);
-      TA(const NoCopy &, lz::Optional<const NoCopy &>(), void);
-      TA(NoCopy &, lz::Optional<lz::Optional<NoCopy &>>(), void);
+      TA(NoCopy &, NoCopy & (), lz::detail::Void);
+      TA(const NoCopy &, const NoCopy &(), lz::detail::Void);
+      TA(NoCopy &, lz::Optional<NoCopy &>(), lz::detail::Void);
+      TA(const NoCopy &, lz::Optional<const NoCopy &>(), lz::detail::Void);
+      TA(NoCopy &, lz::Optional<lz::Optional<NoCopy &>>(), lz::detail::Void);
 
       TA(lz::detail::NeverYieldNonValuedOptionalType, lz::Optional<NoCopy> & (),
-         void);
+         lz::detail::Void);
       TA(lz::detail::NeverYieldNonValuedOptionalType,
-         const lz::Optional<NoCopy> &(), void);
+         const lz::Optional<NoCopy> &(), lz::detail::Void);
       TA(lz::detail::NeverYieldNonValuedOptionalType,
-         lz::Optional<lz::Optional<NoCopy &> &>(), void);
+         lz::Optional<lz::Optional<NoCopy &> &>(), lz::detail::Void);
       TA(lz::detail::NeverYieldNonValuedOptionalType,
-         const lz::Optional<lz::Optional<NoCopy &> &> &(), void);
+         const lz::Optional<lz::Optional<NoCopy &> &> &(), lz::detail::Void);
 
       THEN("cannot return lvalue reference of Optional itself") {}
     }
 
     WHEN("returning a rvalue reference") {
-      TA(NoCopy &&, NoCopy && (), void);
-      TA(const NoCopy &&, const NoCopy && (), void);
+      TA(NoCopy &&, NoCopy && (), lz::detail::Void);
+      TA(const NoCopy &&, const NoCopy && (), lz::detail::Void);
 
       TA(lz::detail::NeverYieldNonValuedOptionalType,
-         lz::Optional<NoCopy> && (), void);
+         lz::Optional<NoCopy> && (), lz::detail::Void);
       TA(lz::detail::NeverYieldNonValuedOptionalType,
-         const lz::Optional<NoCopy> && (), void);
+         const lz::Optional<NoCopy> && (), lz::detail::Void);
       TA(lz::detail::NeverYieldNonValuedOptionalType,
-         const lz::Optional<lz::Optional<NoCopy &&> &&> && (), void);
+         const lz::Optional<lz::Optional<NoCopy &&> &&> && (),
+         lz::detail::Void);
 
       THEN("cannot return rvalue reference of Optional itself") {}
     }
@@ -312,7 +470,7 @@ SCENARIO("examine the YieldType on Generator", "[yieldType]") {
     }
 
     WHEN("passing by rvalue reference") {
-      TA(int, L(int, void), void);
+      TA(int, L(int, void), lz::detail::Void);
       TA(int, L(int, lz::Optional<NoCopy &&>), lz::nullopt_t);
       TA(int, L(int, auto &&), NoCopy);
 
@@ -1261,7 +1419,7 @@ SCENARIO("define a simple middle component", "[middle]") {
 }
 
 template <typename T>
-auto until(T &&status) {
+auto Until(T &&status) {
   return
       [status, reached = false](auto &&gen) mutable -> decltype(lz::next(gen)) {
         auto val = lz::next(gen);
@@ -1275,7 +1433,7 @@ auto until(T &&status) {
 }
 
 template <typename T>
-auto iterate(const std::initializer_list<T> &list) {
+auto Iterate(const std::initializer_list<T> &list) {
   return [begin = list.begin(), end = list.end()]() mutable -> lz::Optional<T> {
     if (begin != end) {
       return *begin++;
@@ -1285,7 +1443,19 @@ auto iterate(const std::initializer_list<T> &list) {
 }
 
 template <typename T>
-auto allTheSame() {
+auto Iterate(T &list) {
+  return
+      [begin = list.begin(),
+       end = list.end()]() mutable -> lz::Optional<typename T::value_type &> {
+        if (begin != end) {
+          return *begin++;
+        }
+        return lz::nullopt;
+      };
+}
+
+template <typename T>
+auto AllTheSame() {
   return lz::gen([p = T{}, init = T{}](const T &data) mutable {
     if (p == init) {
       p = data;
@@ -1296,12 +1466,70 @@ auto allTheSame() {
   });
 };
 
+auto SplitWords(const std::string &s) { return SplitString(s, "(\\W+)"); }
+
+template <typename T>
+auto Count(T &&t) {
+  return [t = std::forward<T>(t)](const auto &data) {
+    return std::count(std::begin(data), std::end(data), t);
+  };
+}
+
+template <typename M, typename T>
+auto MaximumOn(M T::*fn) {
+  auto mem = std::mem_fn(fn);
+  using R = typename decltype(mem)::result_type;
+  return [mem, max = std::numeric_limits<R>::min(),
+          p = static_cast<T *>(nullptr)](T &t) mutable -> T & {
+    auto x = mem(t);
+
+    if (max < x) {
+      max = x;
+      p = &t;
+    }
+
+    return *p;
+  };
+}
+
+auto Ints(int start = 0) {
+  return [i = start]() mutable { return i++; };
+}
+
+auto Show(const std::string &cont) {
+  return [cont](auto &&item) mutable {
+    return ShowCont(cont, std::forward<decltype(item)>(item));
+  };
+}
+
+auto CollatzSeq(int x) {
+  std::list<int> result;
+  while (x > 1) {
+    result.push_back(x);
+    if (x % 2 == 0) {
+      x = x / 2;
+    } else {
+      x = 3 * x + 1;
+    }
+  }
+  result.push_back(x);
+  return result;
+}
+
+template <typename T>
+auto Vector() {
+  return [c = std::vector<T>{}](T &&item) mutable {
+    c.emplace_back(std::forward<T>(item));
+    return std::ref(c);
+  };
+}
+
 SCENARIO("define complex middleware components", "[middleware]") {
   GIVEN("The same old song") {
-    auto middleware = allTheSame<std::string>() | until(false);
+    auto middleware = AllTheSame<std::string>() | Until(false);
 
     WHEN("all the same") {
-      auto f = iterate({"same old", "same old"}) | middleware;
+      auto f = Iterate({"same old", "same old"}) | middleware;
       REQUIRE(!!f);
 
       THEN("got true") { REQUIRE(*f); }
@@ -1309,12 +1537,85 @@ SCENARIO("define complex middleware components", "[middleware]") {
 
     WHEN("not all the same") {
       auto f =
-          iterate({"same old", "same old", "xxx", "same old"}) | middleware;
+          Iterate({"same old", "same old", "xxx", "same old"}) | middleware;
       REQUIRE(!!f);
 
       THEN("got false") { REQUIRE(!*f); }
     }
   }
 
-  GIVEN("The I in our team") {}
+  GIVEN("The I in our team") {
+    auto middleware = lz::gen(SplitWords) | lz::gen(Count("I"));
+
+    std::string s0 = "Our team is great. I love everybody I work with.";
+    WHEN(s0) {
+      auto f = Iterate({s0}) | middleware;
+      REQUIRE(!!f);
+
+      THEN("got 2") { REQUIRE(*f == 2); }
+    }
+
+    std::string s1 = "Our team is great.";
+    WHEN(s1) {
+      auto f = Iterate({s1}) | middleware;
+      REQUIRE(!!f);
+
+      THEN("got 0") { REQUIRE(*f == 0); }
+    }
+  }
+
+  GIVEN("The cutest kitty") {
+    struct cat {
+      double cuteness() const {
+        return softness_ * temperature_ * roundness_ * fur_amount_ - size_;
+      }
+      std::string name_;
+      double softness_;
+      double temperature_;
+      double size_;
+      double roundness_;
+      double fur_amount_;
+    };
+
+    auto middleware = lz::gen(MaximumOn(&cat::cuteness));
+
+    WHEN("have four cats") {
+      std::vector<cat> cats = {{"Tigger", 5, 5, 5, 5, 5},
+                               {"Simba", 2, 9, 9, 2, 7},
+                               {"Muffin", 9, 4, 2, 8, 6},
+                               {"Garfield", 6, 5, 7, 9, 5}};
+      auto f = Iterate(cats) | middleware;
+      REQUIRE(!!f);
+
+      THEN("got Muffin") { REQUIRE((*f).name_ == "Muffin"); }
+    }
+  }
+
+  GIVEN("Function composition, binding and map creation") {
+    auto middleware =
+        CollatzSeq |
+        lz::gen(Show(" => "));  // | lz::gen(Vector<std::string>());
+
+    WHEN("have 30 ints") {
+      auto f = Ints(1) | middleware | lz::limit(30);
+      std::vector<std::string> vec;
+      std::copy(std::begin(f), std::end(f), std::back_inserter(vec));
+      REQUIRE(vec.size() == 30);
+      REQUIRE(vec[12] == "13 => 40 => 20 => 10 => 5 => 16 => 8 => 4 => 2 => 1");
+
+      // TODO: create map via pipeline
+    }
+  }
 }
+
+SCENARIO("define once piplines", "[once]") {
+  cleanup();
+  WHEN("has no limit tailing") {
+    NoCopy x = lz::gen(rvalue) | lz::gen(clvfilter);
+    REQUIRE(x.data == ":filtered");
+    CHECK_ACCESS(1, 0);
+  }
+}
+
+// TODO:
+// (a && b) | c => if a && b then c(a, b)
