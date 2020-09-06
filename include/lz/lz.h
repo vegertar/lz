@@ -200,7 +200,7 @@ class Iterator : public std::iterator<std::forward_iterator_tag,
 
   auto operator==(const Iterator &other) {
     if (ended == other.ended) {
-      return ended || (gen == other.gen);
+      return ended || (gen == other.gen && n == other.n);
     }
     return false;
   }
@@ -348,14 +348,14 @@ class Middleware : public MiddlewareBase {
   template <typename T>
   inline auto compose(T &&t) & {
     using MemType = decltype(member.compose(std::forward<T>(t)));
-    using R = typename T::Rebind<FuncType, MemType>::type;
+    using R = typename T::template Rebind<FuncType, MemType>::type;
     return R(producer, member.compose(std::forward<T>(t)));
   }
 
   template <typename T>
   inline auto compose(T &&t) && {
     using MemType = decltype(member.compose(std::forward<T>(t)));
-    using R = typename T::Rebind<FuncType, MemType>::type;
+    using R = typename T::template Rebind<FuncType, MemType>::type;
     return R(std::move(producer),
              std::move(member).compose(std::forward<T>(t)));
   }
@@ -380,13 +380,13 @@ class Middleware<Func, Void> : public MiddlewareBase {
 
   template <typename T>
   inline auto compose(T &&t) & {
-    using R = typename T::Rebind<FuncType, T>::type;
+    using R = typename T::template Rebind<FuncType, T>::type;
     return R(producer, std::forward<T>(t));
   }
 
   template <typename T>
   inline auto compose(T &&t) && {
-    using R = typename T::Rebind<FuncType, T>::type;
+    using R = typename T::template Rebind<FuncType, T>::type;
     return R(std::move(producer), std::forward<T>(t));
   }
 

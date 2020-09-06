@@ -483,7 +483,8 @@ SCENARIO("examine the SubmitType on Generator", "[submitType]") {
 #undef L
 #undef TA
 
-SCENARIO("try possible cases on overloaded genApply functions", "[genApply]") {
+SCENARIO("try possible entry started cases on overloaded genApply functions",
+         "[genApply]") {
   GIVEN("lambdas") {
 #define TA(a, b, c) \
   TypeAssert<a, decltype(lz::detail::genApply(b, lz::detail::generator(c)))>()
@@ -581,6 +582,52 @@ SCENARIO("try possible cases on overloaded genApply functions", "[genApply]") {
   }
 }
 #undef TA
+
+SCENARIO("try possible ways to create middleware") {
+  GIVEN("use genApply") {
+#define TA(a)                                                              \
+  static_assert(std::is_base_of<lz::detail::MiddlewareBase,                \
+                                decltype(lz::detail::genApply(a))>::value, \
+                "not a Middleware")
+
+#define NTA(a)                                                              \
+  static_assert(!std::is_base_of<lz::detail::MiddlewareBase,                \
+                                 decltype(lz::detail::genApply(a))>::value, \
+                "is a Middleware")
+
+    TA(rvfilter);
+    TA(lvfilter);
+    TA(RandomString);
+
+    NTA(rvalue);
+    NTA(roption);
+    NTA(clvalueLambda);
+  }
+
+#undef TA
+#undef NTA
+  GIVEN("use generator") {
+#define TA(a)                                                               \
+  static_assert(std::is_base_of<lz::detail::MiddlewareBase,                 \
+                                decltype(lz::detail::generator(a))>::value, \
+                "not a Middleware")
+
+#define NTA(a)                                                               \
+  static_assert(!std::is_base_of<lz::detail::MiddlewareBase,                 \
+                                 decltype(lz::detail::generator(a))>::value, \
+                "is a Middleware")
+
+    TA(rvfilter);
+    TA(lvfilter);
+    TA(RandomString);
+
+    NTA(rvalue);
+    NTA(roption);
+    NTA(clvalueLambda);
+  }
+}
+#undef TA
+#undef NTA
 
 SCENARIO("define an entry component", "[entry]") {
   GIVEN("() -> T") {
@@ -1617,7 +1664,38 @@ SCENARIO("define once piplines", "[once]") {
   }
 }
 
+SCENARIO("forward iterator", "[iterator]") {
+  WHEN("limit 0") {
+    auto f = Ints(0) | lz::limit(0);
+    auto begin = std::begin(f);
+    auto end = std::end(f);
+    THEN("begin equals end") { REQUIRE((begin == end)); }
+  }
+
+  WHEN("limit 10") {
+    auto f = Ints(0) | lz::limit(10);
+    auto begin = std::begin(f);
+    auto end = std::end(f);
+
+    THEN("begin not equals end") { REQUIRE((begin != end)); }
+
+    AND_THEN("*begins multitimes equals 0") {
+      REQUIRE(*begin == 0);
+      REQUIRE(*begin == 0);
+      REQUIRE(*begin == 0);
+    }
+
+    AND_THEN("begin + 10 equals end") {
+      auto start = begin;
+      for (auto i = 0; i < 10; ++i) {
+        ++begin;
+        REQUIRE((start != begin));
+      }
+      REQUIRE((begin == end));
+    }
+  }
+}
+
 // TODO:
 // (a && b) | c => if a && b then c(b), or nil
 // (a || b) | c => if a then a | c, elif b then c(b), or nil
-// TODO: test if no generator case matched, create a Middleware, i.e. L468
