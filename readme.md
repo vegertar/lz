@@ -1,1 +1,1 @@
-# Lazy Code
+# LZ (Lazy Code)

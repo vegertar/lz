@@ -10,8 +10,6 @@
 #include "nonstd/optional.hpp"
 #endif
 
-#define LZ_VERSION "0.0.1"
-
 namespace lz {
 
 #if __cplusplus >= 201703
@@ -465,6 +463,11 @@ inline auto generator(F &&f, T &&t) {
   static_assert(std::is_base_of<GeneratorBase, RmRef<T>>::value,
                 "require a Generator");
   return std::forward<F>(f).compose(std::forward<T>(t));
+}
+
+template <typename F, typename... T>
+inline auto generator(F &&f, T &&...) {
+  return Middleware<F, Void>{std::forward<F>(f)};
 }
 
 }  // namespace detail
