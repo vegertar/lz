@@ -1618,6 +1618,6 @@ SCENARIO("define once piplines", "[once]") {
 }
 
 // TODO:
-// (a && b) | c => if a && b then c(a, b)
-
+// (a && b) | c => if a && b then c(b), or nil
+// (a || b) | c => if a then a | c, elif b then c(b), or nil
 // TODO: test if no generator case matched, create a Middleware, i.e. L468
