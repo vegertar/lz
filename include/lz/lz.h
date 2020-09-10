@@ -154,14 +154,15 @@ using ResultType = decltype(std::declval<F>()(std::declval<A>()...));
 }  // namespace detail
 
 template <typename Gen, detail::EnableIfType<detail::GeneratorBase, Gen> = 0>
-inline auto next(Gen &gen) {  // Yes, it's lvalue reference, calling from *this
+inline auto next(Gen &gen) noexcept {
+  // Yes, it's lvalue reference, calling from *this
   return Optional<typename detail::RmRef<Gen>::SubmitType>(gen());
 }
 
 namespace detail {
 
 template <typename Gen, EnableIfType<GeneratorBase, Gen> = 0>
-auto apply(Gen &gen, Optional<typename Gen::SubmitType> &res) {
+auto apply(Gen &gen, Optional<typename Gen::SubmitType> &res) noexcept {
   while (true) {
     auto val = next(gen);
     if (!val) {
@@ -189,30 +190,30 @@ template <typename Gen>
 class Iterator : public std::iterator<std::forward_iterator_tag,
                                       typename detail::RmRef<Gen>::SubmitType> {
  public:
-  Iterator() : ended(true) {}
-  explicit Iterator(Gen *g) : gen(g) {
+  Iterator() noexcept : ended(true) {}
+  explicit Iterator(Gen *g) noexcept : gen(g) {
     if (gen) {
       step();
     }
   }
 
-  decltype(auto) operator*() { return *(gen->value); }
+  decltype(auto) operator*() noexcept { return *(gen->value); }
 
-  auto operator==(const Iterator &other) {
+  decltype(auto) operator++() noexcept {
+    step();
+    return *this;
+  }
+
+  auto operator==(const Iterator &other) noexcept {
     if (ended == other.ended) {
       return ended || (gen == other.gen && n == other.n);
     }
     return false;
   }
-  auto operator!=(const Iterator &other) { return !operator==(other); }
-
-  Iterator &operator++() {
-    step();
-    return *this;
-  }
+  auto operator!=(const Iterator &other) noexcept { return !operator==(other); }
 
  private:
-  void step() {
+  void step() noexcept {
     if (ended) {
       return;
     }
@@ -261,12 +262,12 @@ class Generator : public GeneratorBase {
   Generator(F &&producer, T &&member) noexcept
       : producer(std::forward<F>(producer)), member(std::forward<T>(member)) {}
 
-  decltype(auto) operator()() { return producer(member); }
+  decltype(auto) operator()() noexcept { return producer(member); }
 
-  operator UseVoidIfOptional<InvokeType>() && { return operator()(); }
+  operator UseVoidIfOptional<InvokeType>() &&noexcept { return operator()(); }
 
   // use boolean cast under lvalue scenes as a way of evaluation & validation
-  operator bool() & {
+  operator bool() &noexcept {
     if (!applied) {
       apply(*this, value);
       applied = true;
@@ -275,10 +276,10 @@ class Generator : public GeneratorBase {
   }
 
   // forces to retrieve value on lvalue case only
-  const auto &operator*() & { return *value; }
+  const auto &operator*() &noexcept { return *value; }
 
-  auto begin() { return iterator{this}; }
-  auto end() { return iterator{}; }
+  auto begin() noexcept { return iterator{this}; }
+  auto end() noexcept { return iterator{}; }
 
  private:
   FuncType producer;
@@ -305,11 +306,11 @@ class Generator<Func, Void> : public GeneratorBase {
   template <typename F>
   Generator(F &&producer) noexcept : producer(std::forward<F>(producer)) {}
 
-  decltype(auto) operator()() { return producer(); }
+  decltype(auto) operator()() noexcept { return producer(); }
 
-  operator UseVoidIfOptional<InvokeType>() && { return operator()(); }
+  operator UseVoidIfOptional<InvokeType>() &&noexcept { return operator()(); }
 
-  operator bool() & {
+  operator bool() &noexcept {
     if (!applied) {
       apply(*this, value);
       applied = true;
@@ -317,10 +318,10 @@ class Generator<Func, Void> : public GeneratorBase {
     return static_cast<bool>(value);
   }
 
-  const auto &operator*() & { return *value; }
+  const auto &operator*() &noexcept { return *value; }
 
-  auto begin() { return iterator{this}; }
-  auto end() { return iterator{}; }
+  auto begin() noexcept { return iterator{this}; }
+  auto end() noexcept { return iterator{}; }
 
  private:
   FuncType producer;
@@ -346,14 +347,14 @@ class Middleware : public MiddlewareBase {
       : producer(std::forward<F>(producer)), member(std::forward<T>(member)) {}
 
   template <typename T>
-  inline auto compose(T &&t) & {
+  inline auto compose(T &&t) &noexcept {
     using MemType = decltype(member.compose(std::forward<T>(t)));
     using R = typename T::template Rebind<FuncType, MemType>::type;
     return R(producer, member.compose(std::forward<T>(t)));
   }
 
   template <typename T>
-  inline auto compose(T &&t) && {
+  inline auto compose(T &&t) &&noexcept {
     using MemType = decltype(member.compose(std::forward<T>(t)));
     using R = typename T::template Rebind<FuncType, MemType>::type;
     return R(std::move(producer),
@@ -379,13 +380,13 @@ class Middleware<Func, Void> : public MiddlewareBase {
   Middleware(F &&producer) noexcept : producer(std::forward<F>(producer)) {}
 
   template <typename T>
-  inline auto compose(T &&t) & {
+  inline auto compose(T &&t) &noexcept {
     using R = typename T::template Rebind<FuncType, T>::type;
     return R(producer, std::forward<T>(t));
   }
 
   template <typename T>
-  inline auto compose(T &&t) && {
+  inline auto compose(T &&t) &&noexcept {
     using R = typename T::template Rebind<FuncType, T>::type;
     return R(std::move(producer), std::forward<T>(t));
   }
@@ -403,7 +404,7 @@ using GenYieldType = Optional<YieldType<GenYieldTypeImpl<Func, Gen>>>;
 
 template <typename Func, typename Gen, EnableIfType<GeneratorBase, Gen> = 0,
           EnableIfType<OptionalBase, typename RmRef<Gen>::InvokeType> = 0>
-inline GenYieldType<Func, Gen> genApply(Func &&f, Gen &&g) {
+inline GenYieldType<Func, Gen> genApply(Func &&f, Gen &&g) noexcept {
   auto val = g();
   if (!val) {
     return {};
@@ -425,48 +426,48 @@ inline GenYieldType<Func, Gen> genApply(Func &&f, Gen &&g) {
 
 template <typename Func, typename Gen, EnableIfType<GeneratorBase, Gen> = 0,
           EnableIfNotType<OptionalBase, typename RmRef<Gen>::InvokeType> = 0>
-inline decltype(auto) genApply(Func &&f, Gen &&g) {
+inline decltype(auto) genApply(Func &&f, Gen &&g) noexcept {
   return std::forward<Func>(f)(g());
 }
 
 // Since a valid component never be returning void, so use F() to deduce
 // if given F is Entry or Middleware.
 template <typename Func, EnableIfNotSame<void, ResultType<Func>> = 0>
-inline decltype(auto) genApply(Func &&f) {
+inline decltype(auto) genApply(Func &&f) noexcept {
   return std::forward<Func>(f)();  // this is an Entry component
 }
 
 template <typename Func, typename... Param>
-inline auto genApply(Func &&, Param &&...) {
+inline auto genApply(Func &&, Param &&...) noexcept {
   return MiddlewareBase{};
 }
 
 template <typename F, EnableIfNotType<MiddlewareBase, ResultType<F>> = 0>
-inline auto generator(F &&f) {
+inline auto generator(F &&f) noexcept {
   return Generator<F, Void>(std::forward<F>(f));
 }
 
 template <typename F, EnableIfType<MiddlewareBase, ResultType<F>> = 0>
-inline auto generator(F &&f) {
+inline auto generator(F &&f) noexcept {
   return Middleware<F, Void>{std::forward<F>(f)};
 }
 
 template <typename F, typename T, EnableIfNotType<MiddlewareBase, F> = 0>
-inline auto generator(F &&f, T &&t) {
+inline auto generator(F &&f, T &&t) noexcept {
   static_assert(std::is_base_of<GeneratorBase, RmRef<T>>::value,
                 "require a Generator");
   return Generator<F, T>(std::forward<F>(f), std::forward<T>(t));
 }
 
 template <typename F, typename T, EnableIfType<MiddlewareBase, F> = 0>
-inline auto generator(F &&f, T &&t) {
+inline auto generator(F &&f, T &&t) noexcept {
   static_assert(std::is_base_of<GeneratorBase, RmRef<T>>::value,
                 "require a Generator");
   return std::forward<F>(f).compose(std::forward<T>(t));
 }
 
 template <typename F, typename... T>
-inline auto generator(F &&f, T &&...) {
+inline auto generator(F &&f, T &&...) noexcept {
   return Middleware<F, Void>{std::forward<F>(f)};
 }
 
@@ -507,7 +508,7 @@ inline auto gen(Func &&f) noexcept {
 
 // limit causes pipe stream evaluating at most N times.
 inline auto limit(std::size_t n) noexcept {
-  return [count = 0, n](auto &&gen) mutable -> decltype(next(gen)) {
+  return [count = 0, n](auto &&gen) mutable noexcept -> decltype(next(gen)) {
     if (count++ < n) {
       return gen();
     }
@@ -557,7 +558,7 @@ inline auto operator|(In &&in, OutR (*out)(OutA...)) noexcept {
 }
 
 template <typename Func, typename... Args>
-inline auto gen(Func &&f, Args &&... args) {
+inline auto gen(Func &&f, Args &&... args) noexcept {
   return operator|(gen(std::forward<Func>(f)),
                    gen(std::forward<Args>(args)...));
 }
