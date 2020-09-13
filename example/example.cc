@@ -5,7 +5,7 @@ auto helloworld() { return "hello world\n"; }
 auto show = lz::gen(printf);
 
 auto show2 = ([](auto &&gen) -> lz::Optional<int> {
-               auto x = lz::next(gen);
+               auto x = lz::get(gen);
                if (!x) {
                  return {};
                }

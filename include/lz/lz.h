@@ -154,7 +154,7 @@ using ResultType = decltype(std::declval<F>()(std::declval<A>()...));
 }  // namespace detail
 
 template <typename Gen, detail::EnableIfType<detail::GeneratorBase, Gen> = 0>
-inline auto next(Gen &gen) noexcept {
+inline auto get(Gen &gen) noexcept {
   // Yes, it's lvalue reference, calling from *this
   return Optional<typename detail::RmRef<Gen>::SubmitType>(gen());
 }
@@ -164,7 +164,7 @@ namespace detail {
 template <typename Gen, EnableIfType<GeneratorBase, Gen> = 0>
 auto apply(Gen &gen, Optional<typename Gen::SubmitType> &res) noexcept {
   while (true) {
-    auto val = next(gen);
+    auto val = get(gen);
     if (!val) {
       break;
     }
@@ -218,7 +218,7 @@ class Iterator : public std::iterator<std::forward_iterator_tag,
       return;
     }
 
-    gen->value = next(*gen);
+    gen->value = get(*gen);
     if (!(gen->value)) {
       ended = true;
     } else {
@@ -476,8 +476,8 @@ inline auto generator(F &&f, T &&...) noexcept {
 // gen gives the target function an Optional wrapper if possible.
 // But if you wanna handle Generator yourself, e.g. a lambda defined as
 //
-//   [](auto &&gen) -> decltype(lz::next(gen)) {
-//     auto val = lz::next(gen);
+//   [](auto &&gen) -> decltype(lz::get(gen)) {
+//     auto val = lz::get(gen);
 //     if (!val) { return {}; }
 //
 //     decltype(auto) data = *val;
@@ -508,7 +508,7 @@ inline auto gen(Func &&f) noexcept {
 
 // limit causes pipe stream evaluating at most N times.
 inline auto limit(std::size_t n) noexcept {
-  return [count = 0, n](auto &&gen) mutable noexcept -> decltype(next(gen)) {
+  return [count = 0, n](auto &&gen) mutable noexcept -> decltype(get(gen)) {
     if (count++ < n) {
       return gen();
     }
@@ -555,6 +555,22 @@ inline auto operator|(InR (*in)(InA...), Out &&out) noexcept {
 template <typename In, typename OutR, typename... OutA>
 inline auto operator|(In &&in, OutR (*out)(OutA...)) noexcept {
   return operator|(std::forward<In>(in), gen(out));
+}
+
+template <typename Left, typename Right>
+inline auto operator&&(Left &&left, Right &&right) noexcept {}
+
+template <typename Left, typename Right>
+inline auto operator||(Left &&left, Right &&right) noexcept {}
+
+template <typename T>
+inline auto operator+(T &t) noexcept {
+  return t;
+}
+
+template <typename T>
+inline auto operator-(T &t) noexcept {
+  return std::move(t);
 }
 
 template <typename Func, typename... Args>

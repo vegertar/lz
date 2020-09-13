@@ -1468,8 +1468,8 @@ SCENARIO("define a simple middle component", "[middle]") {
 template <typename T>
 auto Until(T &&status) {
   return
-      [status, reached = false](auto &&gen) mutable -> decltype(lz::next(gen)) {
-        auto val = lz::next(gen);
+      [status, reached = false](auto &&gen) mutable -> decltype(lz::get(gen)) {
+        auto val = lz::get(gen);
         if (reached || !val) {
           return {};
         }
@@ -1693,5 +1693,25 @@ SCENARIO("forward iterator", "[iterator]") {
       }
       REQUIRE((begin == end));
     }
+  }
+}
+
+SCENARIO("logical generators", "[logical]") {
+  GIVEN("a && b") {
+    WHEN("a got null") {}
+
+    WHEN("b got null") {}
+
+    WHEN("both a and b got well") {}
+  }
+
+  GIVEN("x | (a && b)") {
+    WHEN("x got null") {}
+
+    WHEN("a got null") {}
+
+    WHEN("b got null") {}
+
+    WHEN("both a and b got well") {}
   }
 }

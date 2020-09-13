@@ -49,7 +49,7 @@ If rewrite the `show` (global variable appeared in example), a complete lz-frien
 
 ```C++
 auto show2 = ([](auto &&gen) -> lz::Optional<int> {
-               auto x = lz::next(gen);
+               auto x = lz::get(gen);
                if (!x) {
                  return {};
                }
@@ -76,7 +76,7 @@ The results were
 17
 ```
 
-The parameter `gen` is an instance of `lz::Generator`, indicates the previous function in calling chain. Now we just need to know that there is a helper function `lz::next` could retrieve the previous function result, an optional wrapper similar to `std::optional<T>`, in this case, is `lz::Optional<const char *("hello world\n")>`. So before using `*x` to get the actual value, it's generally safety to check if the optional data `x` is available.
+The parameter `gen` is an instance of `lz::Generator`, indicates the previous function in calling chain. Now we just need to know that there is a helper function `lz::get` could retrieve the function result, an optional wrapper similar to `std::optional<T>`, in this case, is `lz::Optional<const char *>{"hello world\n"}`. So before using `*x` to get the actual value, it's generally safety to check if the optional data `x` is available.
 
 And the tailing `lz::limit(2)` controlling the loop runs 2 times.
 
@@ -90,7 +90,7 @@ Template magic did them all.
 
 There are only 3 APIs in `lz` header file:
 
-- **lz::next(gen)**: retrieve the previous function result in an Optional wrapper.
+- **lz::get(gen)**: retrieve the previous function result in an Optional wrapper.
 - **lz::limit(n)**: limits the loop running at most `n` times.
 - **lz::gen(func)**: converts ordinary functions to lz-friendly lambda, supported function signatures are:
 
