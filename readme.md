@@ -12,7 +12,7 @@ Heavily inspired by [SaadAttieh/lazyCode](https://github.com/SaadAttieh/lazyCode
 - **Component**: similar to path component, so do functions between | , but I call the entry(first) component a _Generator_, others are _Middleware_.
 - **No algorithm/container**: loads of excellent librarys, e.g. fplus, have existed years, so I just wanna implement an intuitive way to use present functions.
 - **Infinity**: the default execution of pipeline will run forever until one component causes an `nullopt`. _Yes, the example above is an exceptional case runs only once._
-- <s>**Branch and Backend**: && and || for branch, & for backend/async, </s>these operators might be cool, but too complicated to write right now.
+- **Branch** <s>, **Parallel, and Backend**</s>: && and || for branch,<s>/ for parallel, & for backend/async, </s>these operators might be cool, but it seems like a little bit of complicated.
 
 If you please and interested, see [test/components.cc](https://github.com/vegertar/lz/blob/master/test/components.cc) for more details.
 

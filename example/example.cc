@@ -1,6 +1,8 @@
 #include <lz/lz.h>
 #include <stdio.h>
 
+using lz::operator|;
+
 auto helloworld() { return "hello world\n"; }
 auto show = lz::gen(printf);
 

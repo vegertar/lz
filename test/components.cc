@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+using lz::operator|;
+
 struct NoCopy {
   static std::size_t created;
   static std::size_t moved;
@@ -22,7 +24,7 @@ struct NoCopy {
 
   std::string data;
 
-  NoCopy() { NoCopy::created++; }
+  NoCopy(const std::string &s = "") : data(s) { NoCopy::created++; }
   ~NoCopy() { NoCopy::destroyed++; }
   NoCopy(NoCopy &&other) : data(std::move(other.data)) { NoCopy::moved++; }
   NoCopy &operator=(NoCopy &&other) {
@@ -62,6 +64,10 @@ static auto rvalueLambda() {
   return [] { return NoCopy{}; };
 }
 
+static auto rdataLambda(std::string &&s) {
+  return [s = std::move(s)] { return NoCopy{s}; };
+}
+
 static decltype(auto) lvalueLambda() {
   return [nc = NoCopy{}]() mutable -> NoCopy & { return nc; };
 }
@@ -88,24 +94,32 @@ static auto cloptionLambda() {
 
 static auto rvfilter(NoCopy &&a) {
   NoCopy b;
-  b.data += ":filtered";
+  b.data += ":rvfilter";
   return b;
 }
 
 static NoCopy &lvfilter(NoCopy &a) {
-  a.data += ":filtered";
+  a.data += ":lvfilter";
   return a;
 }
 
 static auto clvfilter(const NoCopy &a) {
   NoCopy b;
-  b.data += ":filtered";
+  b.data += ":clvfilter";
   return b;
 }
 
 static auto rvofilter(lz::Optional<NoCopy> &&a) {
-  (*a).data += ":filtered";
+  (*a).data += ":rvofilter";
   return std::move(a);
+}
+
+static decltype(auto) nullValue() { return lz::nullopt; }
+static decltype(auto) nullFilter(NoCopy &&) { return lz::nullopt; }
+
+template <typename T>
+static lz::Optional<T> nullOption() {
+  return {};
 }
 
 template <typename T, typename V>
@@ -121,7 +135,7 @@ static constexpr void TypeAssert(std::false_type) {
 template <typename T, typename Gen,
           lz::detail::EnableIfType<lz::detail::GeneratorBase, Gen> = 0>
 static constexpr void TypeAssert(Gen &gen) {
-  TypeAssert<T, typename lz::detail::RmRef<Gen>::SubmitType>();
+  TypeAssert<T, typename std::decay_t<Gen>::SubmitType>();
 }
 
 #define CHECK_ACCESS(lives, cost)                                    \
@@ -1361,7 +1375,7 @@ SCENARIO("define a simple middle component", "[middle]") {
         auto f = previous | rvfilter | lz::limit(1);
         TypeAssert<NoCopy>(f);
         REQUIRE(!!f);
-        REQUIRE((*f).data == ":filtered");
+        REQUIRE((*f).data == ":rvfilter");
         CHECK_ACCESS(1, 3);
       }
 
@@ -1369,7 +1383,7 @@ SCENARIO("define a simple middle component", "[middle]") {
         auto f = previous | clvfilter | lz::limit(1);
         TypeAssert<NoCopy>(f);
         REQUIRE(!!f);
-        REQUIRE((*f).data == ":filtered");
+        REQUIRE((*f).data == ":clvfilter");
         CHECK_ACCESS(1, 3);
       }
     }
@@ -1382,7 +1396,7 @@ SCENARIO("define a simple middle component", "[middle]") {
         auto f = previous | lvfilter | lz::limit(1);
         TypeAssert<NoCopy &>(f);
         REQUIRE(!!f);
-        REQUIRE((*f).data == ":filtered");
+        REQUIRE((*f).data == ":lvfilter");
         CHECK_ACCESS(0, 0);
       }
 
@@ -1390,7 +1404,7 @@ SCENARIO("define a simple middle component", "[middle]") {
         auto f = previous | clvfilter | lz::limit(1);
         TypeAssert<NoCopy>(f);
         REQUIRE(!!f);
-        REQUIRE((*f).data == ":filtered");
+        REQUIRE((*f).data == ":clvfilter");
         CHECK_ACCESS(1, 2);
       }
     }
@@ -1403,7 +1417,7 @@ SCENARIO("define a simple middle component", "[middle]") {
         auto f = previous | clvfilter | lz::limit(1);
         TypeAssert<NoCopy>(f);
         REQUIRE(!!f);
-        REQUIRE((*f).data == ":filtered");
+        REQUIRE((*f).data == ":clvfilter");
         CHECK_ACCESS(1, 2);
       }
     }
@@ -1416,7 +1430,7 @@ SCENARIO("define a simple middle component", "[middle]") {
         auto f = previous | clvfilter | lz::limit(1);
         TypeAssert<NoCopy>(f);
         REQUIRE(!!f);
-        REQUIRE((*f).data == ":filtered");
+        REQUIRE((*f).data == ":clvfilter");
         CHECK_ACCESS(1, 3);
       }
 
@@ -1424,7 +1438,7 @@ SCENARIO("define a simple middle component", "[middle]") {
         auto f = previous | rvofilter | lz::limit(1);
         TypeAssert<NoCopy>(f);
         REQUIRE(!!f);
-        REQUIRE((*f).data == ":filtered");
+        REQUIRE((*f).data == ":rvofilter");
         CHECK_ACCESS(1, 4);
       }
     }
@@ -1437,7 +1451,7 @@ SCENARIO("define a simple middle component", "[middle]") {
         auto f = previous | lvfilter | lz::limit(1);
         TypeAssert<NoCopy &>(f);
         REQUIRE(!!f);
-        REQUIRE((*f).data == ":filtered");
+        REQUIRE((*f).data == ":lvfilter");
         CHECK_ACCESS(0, 0);
       }
 
@@ -1445,7 +1459,7 @@ SCENARIO("define a simple middle component", "[middle]") {
         auto f = previous | clvfilter | lz::limit(1);
         TypeAssert<NoCopy>(f);
         REQUIRE(!!f);
-        REQUIRE((*f).data == ":filtered");
+        REQUIRE((*f).data == ":clvfilter");
         CHECK_ACCESS(1, 2);
       }
     }
@@ -1458,7 +1472,7 @@ SCENARIO("define a simple middle component", "[middle]") {
         auto f = previous | clvfilter | lz::limit(1);
         TypeAssert<NoCopy>(f);
         REQUIRE(!!f);
-        REQUIRE((*f).data == ":filtered");
+        REQUIRE((*f).data == ":clvfilter");
         CHECK_ACCESS(1, 2);
       }
     }
@@ -1659,7 +1673,7 @@ SCENARIO("define once piplines", "[once]") {
   cleanup();
   WHEN("has no limit tailing") {
     NoCopy x = lz::gen(rvalue) | lz::gen(clvfilter);
-    REQUIRE(x.data == ":filtered");
+    REQUIRE(x.data == ":clvfilter");
     CHECK_ACCESS(1, 0);
   }
 }
@@ -1697,21 +1711,128 @@ SCENARIO("forward iterator", "[iterator]") {
 }
 
 SCENARIO("logical generators", "[logical]") {
+  using lz::operator&&;
+  using lz::operator||;
+
+#define SA(f)                                                         \
+  static_assert(                                                      \
+      std::is_base_of<lz::detail::ComponentBase, decltype(f)>::value, \
+      "should be a Component")
+
   GIVEN("a && b") {
-    WHEN("a got null") {}
+    WHEN("a got null") {
+      auto f = lz::gen(nullValue) && rvalue;
+      SA(f);
 
-    WHEN("b got null") {}
+      THEN("got null") { REQUIRE(!f); }
+    }
 
-    WHEN("both a and b got well") {}
+    WHEN("b got null") {
+      auto f = lz::gen(rvalue) && nullValue;
+      SA(f);
+
+      THEN("got null") { REQUIRE(!f); }
+    }
+
+    WHEN("both a and b got well") {
+      auto f = (rdataLambda("a") && rdataLambda("b")) | lz::limit(1);
+      SA(f);
+
+      THEN("got b") {
+        REQUIRE(!!f);
+        REQUIRE(f->data == "b");
+      }
+    }
   }
 
   GIVEN("x | (a && b)") {
-    WHEN("x got null") {}
+    WHEN("x got null") {
+      auto f = nullValue | (lz::gen(rvfilter) && clvfilter);
+      THEN("got null") { REQUIRE(!f); }
+    }
 
-    WHEN("a got null") {}
+    WHEN("a got null") {
+      auto f = rvalue | (lz::gen(nullFilter) && clvfilter);
+      THEN("got null") { REQUIRE(!f); }
+    }
 
-    WHEN("b got null") {}
+    WHEN("b got null") {
+      auto f = rvalue | (clvfilter && lz::gen(nullFilter));
+      THEN("got null") { REQUIRE(!f); }
+    }
 
-    WHEN("both a and b got well") {}
+    WHEN("both a and b got well") {
+      auto f = rvalue | (lz::gen(rvfilter) && clvfilter) | lz::limit(1);
+
+      THEN("got b") {
+        REQUIRE(!!f);
+        REQUIRE(f->data == ":clvfilter");
+      }
+    }
+  }
+
+  GIVEN("a || b") {
+    WHEN("a got null") {
+      auto f = (lz::gen(nullOption<NoCopy>) || rdataLambda("b")) | lz::limit(1);
+      SA(f);
+
+      THEN("got b") {
+        REQUIRE(!!f);
+        REQUIRE(f->data == "b");
+      }
+    }
+
+    WHEN("b got null") {
+      auto f = (rdataLambda("a") || lz::gen(nullOption<NoCopy>)) | lz::limit(1);
+      SA(f);
+
+      THEN("got a") {
+        REQUIRE(!!f);
+        REQUIRE(f->data == "a");
+      }
+    }
+
+    WHEN("both a and b got well") {
+      auto f = (rdataLambda("a") || rdataLambda("b")) | lz::limit(1);
+      SA(f);
+
+      THEN("got a") {
+        REQUIRE(!!f);
+        REQUIRE(f->data == "a");
+      }
+    }
+  }
+
+  GIVEN("x | (a || b)") {
+    WHEN("x got null") {
+      auto f = nullValue | (lz::gen(rvfilter) || clvfilter);
+      THEN("got null") { REQUIRE(!f); }
+    }
+
+    WHEN("a got null") {
+      auto f = rvalue | (lz::gen(nullFilter) || clvfilter) | lz::limit(1);
+      THEN("got b") {
+        REQUIRE(!!f);
+        REQUIRE(f->data == ":clvfilter");
+      }
+    }
+
+    WHEN("b got null") {
+      auto f = rvalue | (clvfilter || lz::gen(nullFilter)) | lz::limit(1);
+      THEN("got a") {
+        REQUIRE(!!f);
+        REQUIRE(f->data == ":clvfilter");
+      }
+    }
+
+    WHEN("both a and b got well") {
+      auto f = rvalue | (lz::gen(rvfilter) || clvfilter) | lz::limit(1);
+
+      THEN("got a") {
+        REQUIRE(!!f);
+        REQUIRE(f->data == ":rvfilter");
+      }
+    }
   }
 }
+#undef SA
