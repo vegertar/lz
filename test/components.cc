@@ -1836,3 +1836,57 @@ SCENARIO("logical generators", "[logical]") {
   }
 }
 #undef SA
+
+SCENARIO("scale generators", "[scale]") {
+  auto x = lz::gen(lvalue);
+
+  GIVEN("x | (a * 1)") {
+    cleanup();
+    auto f = x | (lz::gen(lvfilter) * 1) | lz::limit(1);
+
+    THEN("applyed once one loop") {
+      REQUIRE(!!f);
+      REQUIRE(f->data == ":lvfilter");
+    }
+  }
+
+  GIVEN("x | (a * 0)") {
+    cleanup();
+    auto f = x | (lz::gen(lvfilter) * 0) | lz::limit(1);
+
+    THEN("ignored") {
+      REQUIRE(!!f);
+      REQUIRE(f->data == "");
+    }
+  }
+
+  GIVEN("x | (a * (-1))") {
+    cleanup();
+    auto f = x | (lz::gen(lvfilter) * (-1)) | lz::limit(10);
+
+    THEN("applyed only once") {
+      REQUIRE(!!f);
+      REQUIRE(f->data == ":lvfilter");
+    }
+  }
+
+  GIVEN("x | (a * 2)") {
+    cleanup();
+    auto f = x | (lz::gen(lvfilter) * 2) | lz::limit(1);
+
+    THEN("applyed twice one loop") {
+      REQUIRE(!!f);
+      REQUIRE(f->data == ":lvfilter:lvfilter");
+    }
+  }
+
+  GIVEN("x | (a * (-2))") {
+    cleanup();
+    auto f = x | (lz::gen(lvfilter) * (-2)) | lz::limit(10);
+
+    THEN("applyed only twice") {
+      REQUIRE(!!f);
+      REQUIRE(f->data == ":lvfilter:lvfilter");
+    }
+  }
+}

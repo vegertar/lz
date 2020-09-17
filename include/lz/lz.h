@@ -132,9 +132,10 @@ struct Optional<T &> : optionalref<T>, detail::OptionalBase {
   Optional(std::reference_wrapper<T> t) noexcept
       : optionalref<T>::optional(t) {}
 
-  decltype(auto) operator*() noexcept {
+  decltype(auto) operator*() const noexcept {
     return optionalref<T>::operator*().get();
   }
+  decltype(auto) operator->() const noexcept { return &operator*(); }
 };
 
 template <typename T>
@@ -144,7 +145,10 @@ struct Optional<std::reference_wrapper<T>> : Optional<T &> {
   Optional(T &t) noexcept : Optional<T &>(t) {}
   Optional(std::reference_wrapper<T> t) noexcept : Optional<T &>(t) {}
 
-  decltype(auto) operator*() noexcept { return Optional<T &>::operator*(); }
+  decltype(auto) operator*() const noexcept {
+    return Optional<T &>::operator*();
+  }
+  decltype(auto) operator->() const noexcept { return &operator*(); }
 };
 
 namespace detail {
@@ -243,20 +247,22 @@ class Iterator : public std::iterator<std::forward_iterator_tag,
     }
   }
 
-  decltype(auto) operator*() noexcept { return *(gen->value); }
+  decltype(auto) operator*() const noexcept { return *(gen->value); }
 
   decltype(auto) operator++() noexcept {
     step();
     return *this;
   }
 
-  auto operator==(const Iterator &other) noexcept {
+  auto operator==(const Iterator &other) const noexcept {
     if (ended == other.ended) {
       return ended || (gen == other.gen && n == other.n);
     }
     return false;
   }
-  auto operator!=(const Iterator &other) noexcept { return !operator==(other); }
+  auto operator!=(const Iterator &other) const noexcept {
+    return !operator==(other);
+  }
 
  private:
   void step() noexcept {
@@ -322,8 +328,8 @@ class Generator : public GeneratorBase {
   }
 
   // forces to retrieve value on lvalue case only
-  const auto &operator*() &noexcept { return *value; }
-  const auto &operator->() &noexcept { return value; }
+  const auto &operator*() const &noexcept { return *value; }
+  const auto &operator->() const &noexcept { return value; }
 
   auto begin() noexcept { return iterator{this}; }
   auto end() noexcept { return iterator{}; }
@@ -365,8 +371,8 @@ class Generator<Func, Void> : public GeneratorBase {
     return static_cast<bool>(value);
   }
 
-  const auto &operator*() &noexcept { return *value; }
-  const auto &operator->() &noexcept { return value; }
+  const auto &operator*() const &noexcept { return *value; }
+  const auto &operator->() const &noexcept { return value; }
 
   auto begin() noexcept { return iterator{this}; }
   auto end() noexcept { return iterator{}; }
@@ -395,7 +401,7 @@ class Middleware : public MiddlewareBase {
       : producer(std::forward<F>(producer)), member(std::forward<T>(member)) {}
 
   template <typename T>
-  inline auto compose(T &&t) &noexcept {
+  inline auto compose(T &&t) const &noexcept {
     using MemType = decltype(member.compose(std::forward<T>(t)));
     using R =
         typename std::decay_t<T>::template Rebind<FuncType, MemType>::type;
@@ -403,7 +409,7 @@ class Middleware : public MiddlewareBase {
   }
 
   template <typename T>
-  inline auto compose(T &&t) &&noexcept {
+  inline auto compose(T &&t) const &&noexcept {
     using MemType = decltype(member.compose(std::forward<T>(t)));
     using R =
         typename std::decay_t<T>::template Rebind<FuncType, MemType>::type;
@@ -430,13 +436,13 @@ class Middleware<Func, Void> : public MiddlewareBase {
   Middleware(F &&producer) noexcept : producer(std::forward<F>(producer)) {}
 
   template <typename T>
-  inline auto compose(T &&t) &noexcept {
+  inline auto compose(T &&t) const &noexcept {
     using R = typename std::decay_t<T>::template Rebind<FuncType, T>::type;
     return R(producer, std::forward<T>(t));
   }
 
   template <typename T>
-  inline auto compose(T &&t) &&noexcept {
+  inline auto compose(T &&t) const &&noexcept {
     using R = typename std::decay_t<T>::template Rebind<FuncType, T>::type;
     return R(std::move(producer), std::forward<T>(t));
   }
@@ -625,6 +631,46 @@ inline auto genOr(Left &&l, Right &&r) noexcept {
   };
 }
 
+template <typename Func, typename Gen, EnableIfMid<Func> = 0,
+          EnableIfGen<Gen> = 0>
+inline auto scaleApply(Func &&f, int &n, Gen &&g) noexcept -> decltype(get(g)) {
+  if (n == 0) {
+    return get(std::forward<Gen>(g));
+  }
+
+  auto m = std::forward<Func>(f).compose(std::forward<Gen>(g));
+
+  if (n > 0) {
+    for (auto i = 0; i < n; ++i) {
+      auto val = get(m);
+      if (!val || i == n - 1) {
+        return val;
+      }
+    }
+    return {};
+  }
+
+  ++n;
+  return get(std::move(m));
+}
+
+template <typename Func, typename... Param>
+inline auto scaleApply(Func, int, Param &&...) noexcept {
+  return MiddlewareBase{};
+}
+
+template <typename F>
+inline auto genScale(F &&f, int n) noexcept {
+  static_assert(std::is_base_of<MiddlewareBase, std::decay_t<F>>::value,
+                "requires a Middleware");
+
+  return [f = std::forward<F>(f),
+          n](auto &&... param) mutable noexcept -> decltype(auto) {
+    return scaleApply(std::forward<F>(f), n,
+                      std::forward<decltype(param)>(param)...);
+  };
+}
+
 template <typename F, EnableIfNotMid<ResultType<F>> = 0>
 inline auto generator(F &&f) noexcept {
   return Generator<F, Void>(std::forward<F>(f));
@@ -801,6 +847,28 @@ inline auto operator+(T &t) noexcept {
 template <typename T>
 inline auto operator-(T &t) noexcept {
   return std::move(t);
+}
+
+template <typename T, detail::EnableIfCom<T> = 0>
+inline auto operator*(T &&t, int n) noexcept {
+  return detail::generator(detail::genScale(std::forward<T>(t), n));
+}
+
+template <typename T, detail::EnableIfNotCom<T> = 0>
+inline auto operator*(T &&t, int n) noexcept {
+  return operator*(detail::generator(std::forward<T>(t)), n);
+}
+
+template <typename T>
+inline auto operator*(int n, T &&t) noexcept {
+  return operator*(std::forward<T>(t), n);
+}
+
+template <typename T>
+inline auto operator~(T &&t) noexcept {
+  static_assert(std::is_base_of<detail::ComponentBase, std::decay_t<T>>::value,
+                "requires a Component");
+  return operator*(std::forward<T>(t), -1);
 }
 
 template <typename Func, typename... Args>
