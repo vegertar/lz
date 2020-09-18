@@ -264,6 +264,8 @@ class Iterator : public std::iterator<std::forward_iterator_tag,
     return !operator==(other);
   }
 
+  auto steps() const noexcept { return n; }
+
  private:
   void step() noexcept {
     if (ended) {
@@ -402,19 +404,18 @@ class Middleware : public MiddlewareBase {
 
   template <typename T>
   inline auto compose(T &&t) const &noexcept {
-    using MemType = decltype(member.compose(std::forward<T>(t)));
-    using R =
-        typename std::decay_t<T>::template Rebind<FuncType, MemType>::type;
-    return R(producer, member.compose(std::forward<T>(t)));
+    auto m = member.compose(std::forward<T>(t));
+    using M = decltype(m);
+    using R = typename std::decay_t<T>::template Rebind<FuncType, M>::type;
+    return R(producer, std::move(m));
   }
 
   template <typename T>
   inline auto compose(T &&t) const &&noexcept {
-    using MemType = decltype(member.compose(std::forward<T>(t)));
-    using R =
-        typename std::decay_t<T>::template Rebind<FuncType, MemType>::type;
-    return R(std::move(producer),
-             std::move(member).compose(std::forward<T>(t)));
+    auto m = std::move(member).compose(std::forward<T>(t));
+    using M = decltype(m);
+    using R = typename std::decay_t<T>::template Rebind<FuncType, M>::type;
+    return R(std::move(producer), std::move(m));
   }
 
  private:
@@ -520,7 +521,8 @@ inline auto genApply(Func &&, Param &&...) noexcept {
 
 template <typename Left, typename Right, EnableIfGen<Left> = 0,
           EnableIfGen<Right> = 0>
-inline auto andApply(Left &&l, Right &&r) noexcept -> decltype(get(r)) {
+inline auto andApply(Left &&l, Right &&r) noexcept
+    -> decltype(get(std::forward<Right>(r))) {
   if (get(std::forward<Left>(l))) {
     return get(std::forward<Right>(r));
   }
@@ -530,7 +532,7 @@ inline auto andApply(Left &&l, Right &&r) noexcept -> decltype(get(r)) {
 template <typename Left, typename Right, typename Gen, EnableIfMid<Left> = 0,
           EnableIfMid<Right> = 0, EnableIfGen<Gen> = 0>
 inline auto andApply(Left &&l, Right &&r, Gen &&g) noexcept
-    -> decltype(get(r.compose(g))) {
+    -> decltype(get(std::forward<Right>(r).compose(std::forward<Gen>(g)))) {
   if (get(std::forward<Left>(l).compose(g))) {
     return get(std::forward<Right>(r).compose(std::forward<Gen>(g)));
   }
@@ -587,7 +589,8 @@ using OrYieldType = typename OrYieldTypeImpl<L, R>::type;
 template <typename Left, typename Right, EnableIfGen<Left> = 0,
           EnableIfGen<Right> = 0>
 inline auto orApply(Left &&l, Right &&r) noexcept
-    -> OrYieldType<decltype(get(l)), decltype(get(r))> {
+    -> OrYieldType<decltype(get(std::forward<Left>(l))),
+                   decltype(get(std::forward<Right>(r)))> {
   auto val = get(std::forward<Left>(l));
   if (val) {
     return val;
@@ -598,8 +601,9 @@ inline auto orApply(Left &&l, Right &&r) noexcept
 
 template <typename Left, typename Right, typename Gen, EnableIfMid<Left> = 0,
           EnableIfMid<Right> = 0, EnableIfGen<Gen> = 0>
-inline auto orApply(Left &&l, Right &&r, Gen &&g) noexcept
-    -> OrYieldType<decltype(get(l.compose(g))), decltype(get(r.compose(g)))> {
+inline auto orApply(Left &&l, Right &&r, Gen &&g) noexcept -> OrYieldType<
+    decltype(get(std::forward<Left>(l).compose(g))),
+    decltype(get(std::forward<Right>(r).compose(std::forward<Gen>(g))))> {
   auto val = get(std::forward<Left>(l).compose(g));
   if (val) {
     return val;
@@ -633,7 +637,8 @@ inline auto genOr(Left &&l, Right &&r) noexcept {
 
 template <typename Func, typename Gen, EnableIfMid<Func> = 0,
           EnableIfGen<Gen> = 0>
-inline auto scaleApply(Func &&f, int &n, Gen &&g) noexcept -> decltype(get(g)) {
+inline auto scaleApply(Func &&f, int &n, Gen &&g) noexcept
+    -> decltype(get(std::forward<Gen>(g))) {
   if (n == 0) {
     return get(std::forward<Gen>(g));
   }
