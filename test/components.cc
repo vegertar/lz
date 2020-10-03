@@ -1890,3 +1890,74 @@ SCENARIO("scale generators", "[scale]") {
     }
   }
 }
+
+auto entryWith() { return "without param"; }
+auto entryWith(int x) { return ShowCont(" ", "with param", x); }
+
+SCENARIO("calling with parameters", "[params]") {
+  GIVEN("an entry with variadic parameters") {
+    auto x = [](auto &&... params) -> std::string {
+      return entryWith(std::forward<decltype(params)>(params)...);
+    };
+
+    auto y = lz::gen([](const std::string &s) { return s; }) | lz::limit(1);
+    auto a = lz::gen([](const std::string &s) { return "a: " + s; });
+    auto b = lz::gen([](const std::string &s) { return "b: " + s; });
+
+    WHEN("get(x | y") {
+      auto val = lz::get(x | y);
+      REQUIRE(!!val);
+      REQUIRE(*val == "without param");
+    }
+
+    WHEN("get(x | y, n)") {
+      auto val = lz::get(x | y, 10);
+      REQUIRE(!!val);
+      REQUIRE(*val == "with param 10");
+    }
+
+    WHEN("get(x | (a && b))") {
+      auto val = lz::get(x | (+a && +b));
+      REQUIRE(!!val);
+      REQUIRE(*val == "b: without param");
+    }
+
+    WHEN("get(x | (a && b), n)") {
+      auto val = lz::get(x | (+a && +b), 10);
+      REQUIRE(!!val);
+      REQUIRE(*val == "b: with param 10");
+    }
+
+    WHEN("get(x | (a || b))") {
+      auto val = lz::get(x | (+a || +b));
+      REQUIRE(!!val);
+      REQUIRE(*val == "a: without param");
+    }
+
+    WHEN("get(x | (a || b), n)") {
+      auto val = lz::get(x | (+a || +b), 10);
+      REQUIRE(!!val);
+      REQUIRE(*val == "a: with param 10");
+    }
+
+    WHEN("get(x | (a * 2))") {
+      auto val = lz::get(x | (+a * 2));
+      REQUIRE(!!val);
+      REQUIRE(*val == "a: without param");
+    }
+
+    WHEN("get(x | (a * 2), 10)") {
+      auto val = lz::get(x | (+a * 2), 10);
+      REQUIRE(!!val);
+      REQUIRE(*val == "a: with param 10");
+    }
+
+    WHEN("working with iterator") {
+      auto gen = x | a;
+      auto i = 0;
+      for (auto j = gen.begin(i); i < 10; j.step(++i)) {
+        REQUIRE(*j == ShowCont(" ", "a: with param", i));
+      }
+    }
+  }
+}

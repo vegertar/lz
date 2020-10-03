@@ -202,10 +202,10 @@ using ResultType = decltype(std::declval<F>()(std::declval<A>()...));
 
 }  // namespace detail
 
-template <typename Gen, detail::EnableIfGen<Gen> = 0>
-inline auto get(Gen &&gen) noexcept {
+template <typename Gen, detail::EnableIfGen<Gen> = 0, typename... Params>
+inline auto get(Gen &&gen, Params &&... params) noexcept {
   return Optional<typename std::decay_t<Gen>::SubmitType>(
-      std::forward<Gen>(gen)());
+      std::forward<Gen>(gen)(std::forward<Params>(params)...));
 }
 
 namespace detail {
@@ -241,9 +241,11 @@ class Iterator : public std::iterator<std::forward_iterator_tag,
                                       typename std::decay_t<Gen>::SubmitType> {
  public:
   Iterator() noexcept : ended(true) {}
-  explicit Iterator(Gen *g) noexcept : gen(g) {
+
+  template <typename... Params>
+  explicit Iterator(Gen *g, Params &&... params) noexcept : gen(g) {
     if (gen) {
-      step();
+      step(std::forward<Params>(params)...);
     }
   }
 
@@ -260,26 +262,28 @@ class Iterator : public std::iterator<std::forward_iterator_tag,
     }
     return false;
   }
+
   auto operator!=(const Iterator &other) const noexcept {
     return !operator==(other);
   }
 
   auto steps() const noexcept { return n; }
 
- private:
-  void step() noexcept {
-    if (ended) {
-      return;
+  template <typename... Params>
+  decltype(auto) step(Params &&... params) noexcept {
+    if (!ended) {
+      gen->value = get(*gen, std::forward<Params>(params)...);
+      if (!(gen->value)) {
+        ended = true;
+      } else {
+        ++n;
+      }
     }
 
-    gen->value = get(*gen);
-    if (!(gen->value)) {
-      ended = true;
-    } else {
-      ++n;
-    }
+    return *this;
   }
 
+ private:
   Gen *gen = nullptr;
   std::size_t n = 0;
   bool ended = false;
@@ -316,7 +320,10 @@ class Generator : public GeneratorBase {
   Generator(F &&producer, T &&member) noexcept
       : producer(std::forward<F>(producer)), member(std::forward<T>(member)) {}
 
-  decltype(auto) operator()() noexcept { return producer(member); }
+  template <typename... Params>
+  decltype(auto) operator()(Params &&... params) noexcept {
+    return producer(member, std::forward<Params>(params)...);
+  }
 
   operator UseVoidIfOptional<InvokeType>() &&noexcept { return operator()(); }
 
@@ -333,7 +340,11 @@ class Generator : public GeneratorBase {
   const auto &operator*() const &noexcept { return *value; }
   const auto &operator->() const &noexcept { return value; }
 
-  auto begin() noexcept { return iterator{this}; }
+  template <typename... Params>
+  auto begin(Params &&... params) noexcept {
+    return iterator{this, std::forward<Params>(params)...};
+  }
+
   auto end() noexcept { return iterator{}; }
 
  private:
@@ -361,7 +372,10 @@ class Generator<Func, Void> : public GeneratorBase {
   template <typename F, EnableIfNotSame<Generator, F> = 0>
   Generator(F &&producer) noexcept : producer(std::forward<F>(producer)) {}
 
-  decltype(auto) operator()() noexcept { return producer(); }
+  template <typename... Params>
+  decltype(auto) operator()(Params &&... params) noexcept {
+    return producer(std::forward<Params>(params)...);
+  }
 
   operator UseVoidIfOptional<InvokeType>() &&noexcept { return operator()(); }
 
@@ -473,9 +487,11 @@ template <typename Func, typename Gen>
 using GenYieldType = typename GenYieldTypeImpl<Func, Gen>::type;
 
 template <typename Func, typename Gen, EnableIfGen<Gen> = 0,
-          EnableIfOpt<typename std::decay_t<Gen>::InvokeType> = 0>
-inline GenYieldType<Func, Gen> genApply(Func &&f, Gen &&g) noexcept {
-  auto val = std::forward<Gen>(g)();
+          EnableIfOpt<typename std::decay_t<Gen>::InvokeType> = 0,
+          typename... Params>
+inline GenYieldType<Func, Gen> genApply(Func &&f, Gen &&g,
+                                        Params &&... params) noexcept {
+  auto val = std::forward<Gen>(g)(std::forward<Params>(params)...);
   if (!val) {
     return {};
   }
@@ -496,15 +512,19 @@ inline GenYieldType<Func, Gen> genApply(Func &&f, Gen &&g) noexcept {
 
 template <typename Func, typename Gen, EnableIfGen<Gen> = 0,
           EnableIfNotOpt<typename std::decay_t<Gen>::InvokeType> = 0,
-          EnableIfNotNull<typename std::decay_t<Gen>::InvokeType> = 0>
-inline decltype(auto) genApply(Func &&f, Gen &&g) noexcept {
-  return std::forward<Func>(f)(std::forward<Gen>(g)());
+          EnableIfNotNull<typename std::decay_t<Gen>::InvokeType> = 0,
+          typename... Params>
+inline decltype(auto) genApply(Func &&f, Gen &&g,
+                               Params &&... params) noexcept {
+  return std::forward<Func>(f)(
+      std::forward<Gen>(g)(std::forward<Params>(params)...));
 }
 
 template <typename Func, typename Gen, EnableIfGen<Gen> = 0,
-          EnableIfNull<typename std::decay_t<Gen>::InvokeType> = 0>
-inline decltype(auto) genApply(Func &&, Gen &&g) noexcept {
-  return std::forward<Gen>(g)();
+          EnableIfNull<typename std::decay_t<Gen>::InvokeType> = 0,
+          typename... Params>
+inline decltype(auto) genApply(Func &&, Gen &&g, Params &&... params) noexcept {
+  return std::forward<Gen>(g)(std::forward<Params>(params)...);
 }
 
 // Since a valid component never be returning void, so use F() to deduce
@@ -514,33 +534,35 @@ inline decltype(auto) genApply(Func &&f) noexcept {
   return std::forward<Func>(f)();  // this is an Entry component
 }
 
-template <typename Func, typename... Param>
-inline auto genApply(Func &&, Param &&...) noexcept {
+template <typename Func, typename... Params>
+inline auto genApply(Func &&, Params &&...) noexcept {
   return MiddlewareBase{};
 }
 
 template <typename Left, typename Right, EnableIfGen<Left> = 0,
-          EnableIfGen<Right> = 0>
-inline auto andApply(Left &&l, Right &&r) noexcept
+          EnableIfGen<Right> = 0, typename... Params>
+inline auto andApply(Left &&l, Right &&r, Params &&... params) noexcept
     -> decltype(get(std::forward<Right>(r))) {
-  if (get(std::forward<Left>(l))) {
-    return get(std::forward<Right>(r));
+  if (get(std::forward<Left>(l), params...)) {
+    return get(std::forward<Right>(r), std::forward<Params>(params)...);
   }
   return {};
 }
 
 template <typename Left, typename Right, typename Gen, EnableIfMid<Left> = 0,
-          EnableIfMid<Right> = 0, EnableIfGen<Gen> = 0>
-inline auto andApply(Left &&l, Right &&r, Gen &&g) noexcept
+          EnableIfMid<Right> = 0, EnableIfGen<Gen> = 0, typename... Params>
+inline auto andApply(Left &&l, Right &&r, Gen &&g, Params &&... params) noexcept
     -> decltype(get(std::forward<Right>(r).compose(std::forward<Gen>(g)))) {
-  if (get(std::forward<Left>(l).compose(g))) {
-    return get(std::forward<Right>(r).compose(std::forward<Gen>(g)));
+  if (get(std::forward<Left>(l).compose(g), params...)) {
+    return get(std::forward<Right>(r).compose(std::forward<Gen>(g)),
+               std::forward<Params>(params)...);
   }
   return {};
 }
 
-template <typename Left, typename Right, typename... Param>
-inline auto andApply(Left &&l, Right &&r, Param &&...) noexcept {
+template <typename Left, typename Right, EnableIfMid<Left> = 0,
+          EnableIfMid<Right> = 0, typename... Params>
+inline auto andApply(Left &&, Right &&, Params &&...) noexcept {
   return MiddlewareBase{};
 }
 
@@ -587,33 +609,36 @@ template <typename L, typename R>
 using OrYieldType = typename OrYieldTypeImpl<L, R>::type;
 
 template <typename Left, typename Right, EnableIfGen<Left> = 0,
-          EnableIfGen<Right> = 0>
-inline auto orApply(Left &&l, Right &&r) noexcept
+          EnableIfGen<Right> = 0, typename... Params>
+inline auto orApply(Left &&l, Right &&r, Params &&... params) noexcept
     -> OrYieldType<decltype(get(std::forward<Left>(l))),
                    decltype(get(std::forward<Right>(r)))> {
-  auto val = get(std::forward<Left>(l));
+  auto val = get(std::forward<Left>(l), params...);
   if (val) {
     return val;
   }
 
-  return get(std::forward<Right>(r));
+  return get(std::forward<Right>(r), std::forward<Params>(params)...);
 }
 
 template <typename Left, typename Right, typename Gen, EnableIfMid<Left> = 0,
-          EnableIfMid<Right> = 0, EnableIfGen<Gen> = 0>
-inline auto orApply(Left &&l, Right &&r, Gen &&g) noexcept -> OrYieldType<
-    decltype(get(std::forward<Left>(l).compose(g))),
-    decltype(get(std::forward<Right>(r).compose(std::forward<Gen>(g))))> {
-  auto val = get(std::forward<Left>(l).compose(g));
+          EnableIfMid<Right> = 0, EnableIfGen<Gen> = 0, typename... Params>
+inline auto orApply(Left &&l, Right &&r, Gen &&g, Params &&... params) noexcept
+    -> OrYieldType<
+        decltype(get(std::forward<Left>(l).compose(g))),
+        decltype(get(std::forward<Right>(r).compose(std::forward<Gen>(g))))> {
+  auto val = get(std::forward<Left>(l).compose(g), params...);
   if (val) {
     return val;
   }
 
-  return get(std::forward<Right>(r).compose(std::forward<Gen>(g)));
+  return get(std::forward<Right>(r).compose(std::forward<Gen>(g)),
+             std::forward<Params>(params)...);
 }
 
-template <typename Left, typename Right, typename... Param>
-inline auto orApply(Left &&l, Right &&r, Param &&...) noexcept {
+template <typename Left, typename Right, EnableIfMid<Left> = 0,
+          EnableIfMid<Right> = 0, typename... Params>
+inline auto orApply(Left &&, Right &&, Params &&...) noexcept {
   return MiddlewareBase{};
 }
 
@@ -636,18 +661,18 @@ inline auto genOr(Left &&l, Right &&r) noexcept {
 }
 
 template <typename Func, typename Gen, EnableIfMid<Func> = 0,
-          EnableIfGen<Gen> = 0>
-inline auto scaleApply(Func &&f, int &n, Gen &&g) noexcept
+          EnableIfGen<Gen> = 0, typename... Params>
+inline auto scaleApply(Func &&f, int &n, Gen &&g, Params &&... params) noexcept
     -> decltype(get(std::forward<Gen>(g))) {
   if (n == 0) {
-    return get(std::forward<Gen>(g));
+    return get(std::forward<Gen>(g), std::forward<Params>(params)...);
   }
 
   auto m = std::forward<Func>(f).compose(std::forward<Gen>(g));
 
   if (n > 0) {
     for (auto i = 0; i < n; ++i) {
-      auto val = get(m);
+      auto val = get(m, params...);
       if (!val || i == n - 1) {
         return val;
       }
@@ -656,11 +681,11 @@ inline auto scaleApply(Func &&f, int &n, Gen &&g) noexcept
   }
 
   ++n;
-  return get(std::move(m));
+  return get(std::move(m), std::forward<Params>(params)...);
 }
 
-template <typename Func, typename... Param>
-inline auto scaleApply(Func, int, Param &&...) noexcept {
+template <typename Func, typename... Params>
+inline auto scaleApply(Func, int, Params &&...) noexcept {
   return MiddlewareBase{};
 }
 
@@ -742,9 +767,11 @@ inline auto gen(Func &&f) noexcept {
 
 // limit causes pipe stream evaluating at most N times.
 inline auto limit(std::size_t n) noexcept {
-  return [count = 0, n](auto &&gen) mutable noexcept -> decltype(get(gen)) {
+  return [count = std::size_t{0}, n](
+             auto &&gen,
+             auto &&... params) mutable noexcept -> decltype(get(gen)) {
     if (count++ < n) {
-      return gen();
+      return gen(std::forward<decltype(params)>(params)...);
     }
     return {};
   };
