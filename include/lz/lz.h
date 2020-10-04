@@ -767,11 +767,10 @@ inline auto gen(Func &&f) noexcept {
 
 // limit causes pipe stream evaluating at most N times.
 inline auto limit(std::size_t n) noexcept {
-  return [count = std::size_t{0}, n](
-             auto &&gen,
-             auto &&... params) mutable noexcept -> decltype(get(gen)) {
+  return [count = decltype(n){0},
+          n](auto &&... params) mutable noexcept -> decltype(get(params...)) {
     if (count++ < n) {
-      return gen(std::forward<decltype(params)>(params)...);
+      return get(std::forward<decltype(params)>(params)...);
     }
     return {};
   };

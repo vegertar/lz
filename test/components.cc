@@ -1494,10 +1494,11 @@ auto Until(T &&status) {
 }
 
 template <typename T>
-auto Iterate(const std::initializer_list<T> &list) {
-  return [begin = list.begin(), end = list.end()]() mutable -> lz::Optional<T> {
-    if (begin != end) {
-      return *begin++;
+auto Iterate(std::initializer_list<T> &&data) {
+  return [list = std::vector<T>{std::move(data)},
+          i = 0]() mutable -> lz::Optional<T> {
+    if (i < list.size()) {
+      return list[i++];
     }
     return lz::nullopt;
   };
